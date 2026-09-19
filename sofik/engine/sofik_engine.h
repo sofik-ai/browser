@@ -24,9 +24,9 @@
  * software frames, navigation, mouse, wheel and keyboard, the address, title,
  * favicon, loading, load-error, console and closed events, new-window
  * requests, JavaScript dialogs (alert, confirm, prompt, beforeunload),
- * downloads, and the DevTools session. Declared but not delivered yet: cursor,
- * tooltip, focused-node and IME events, file dialogs and permissions, and the
- * functions that answer them -- calling one of those fails at link time
+ * downloads, permission prompts, and the DevTools session. Declared but not
+ * delivered yet: cursor, tooltip, focused-node and IME events and file
+ * dialogs, and the functions that answer them -- calling one of those fails at link time
  * rather than silently doing nothing.
  */
 

@@ -4,6 +4,13 @@
 
 #include "headless/lib/browser/headless_permission_manager.h"
 
+#include "base/functional/bind.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
+#include "headless/lib/browser/headless_web_contents_impl.h"
+#include "headless/public/headless_embedder_delegate.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
+
 #include "base/functional/callback.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_result.h"
@@ -28,6 +35,36 @@ void HeadlessPermissionManager::RequestPermissionsFromCurrentDocument(
     const content::PermissionRequestDescription& request_description,
     base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
         callback) {
+  // Sofik: behind a Browser Card there is someone to ask.
+  if (auto* web_contents =
+          content::WebContents::FromRenderFrameHost(render_frame_host)) {
+    HeadlessWebContentsImpl* headless_contents =
+        HeadlessWebContentsImpl::From(web_contents);
+    HeadlessEmbedderDelegate* embedder =
+        headless_contents ? headless_contents->embedder_delegate() : nullptr;
+    if (embedder) {
+      std::vector<blink::PermissionType> types;
+      for (const auto& descriptor : request_description.permissions) {
+        types.push_back(blink::PermissionDescriptorToPermissionType(descriptor));
+      }
+      auto adapted = base::BindOnce(
+          [](base::OnceCallback<void(
+                 const std::vector<content::PermissionResult>&)> reply,
+             const std::vector<blink::mojom::PermissionStatus>& statuses) {
+            std::vector<content::PermissionResult> results;
+            for (blink::mojom::PermissionStatus status : statuses) {
+              results.emplace_back(status);
+            }
+            std::move(reply).Run(results);
+          },
+          std::move(callback));
+      embedder->OnPermissionsRequested(
+          render_frame_host->GetLastCommittedOrigin().GetURL(), types,
+          std::move(adapted));
+      return;
+    }
+  }
+
   // In headless mode we just pretent the user "closes" any permission prompt,
   // without accepting or denying.
   std::vector<content::PermissionResult> result(

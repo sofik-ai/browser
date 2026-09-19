@@ -3,7 +3,12 @@
 #ifndef HEADLESS_PUBLIC_HEADLESS_EMBEDDER_DELEGATE_H_
 #define HEADLESS_PUBLIC_HEADLESS_EMBEDDER_DELEGATE_H_
 
+#include <vector>
+
+#include "base/functional/callback.h"
 #include "headless/public/headless_export.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 
 class GURL;
 
@@ -30,6 +35,17 @@ class HEADLESS_EXPORT HeadlessEmbedderDelegate {
   // alert, confirm, prompt and beforeunload. Returning nullptr keeps
   // headless's behaviour.
   virtual content::JavaScriptDialogManager* GetJavaScriptDialogManager() = 0;
+
+  // A page asking for camera, location, notifications and the like. Headless
+  // on its own pretends the prompt was dismissed. The embedder must run
+  // `callback`, now or later, with one status per requested type, in order;
+  // ASK for all of them is that same dismissal.
+  using PermissionCallback = base::OnceCallback<void(
+      const std::vector<blink::mojom::PermissionStatus>&)>;
+  virtual void OnPermissionsRequested(
+      const GURL& origin,
+      const std::vector<blink::PermissionType>& types,
+      PermissionCallback callback) = 0;
 
  protected:
   virtual ~HeadlessEmbedderDelegate() = default;

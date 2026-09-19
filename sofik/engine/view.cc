@@ -153,6 +153,11 @@ View::View(sofik_view_id id,
 
 View::~View() {
   CancelDialogs(nullptr, /*reset_state=*/true);
+  for (auto& [request, pending] : permissions_) {
+    std::move(pending.callback).Run(std::vector<blink::mojom::PermissionStatus>(
+        pending.types.size(), blink::mojom::PermissionStatus::ASK));
+  }
+  permissions_.clear();
   if (contents_) {
     contents_->set_embedder_delegate(nullptr);
   }
@@ -662,6 +667,79 @@ void View::CancelDialogs(content::WebContents* web_contents, bool reset_state) {
   }
 }
 
+// ---- permissions ------------------------------------------------------------
+
+namespace {
+
+// 0 for a permission the API does not name: those are never granted.
+uint32_t ToSofikPermission(blink::PermissionType type) {
+  switch (type) {
+    case blink::PermissionType::VIDEO_CAPTURE:
+      return SOFIK_PERMISSION_CAMERA;
+    case blink::PermissionType::AUDIO_CAPTURE:
+      return SOFIK_PERMISSION_MICROPHONE;
+    case blink::PermissionType::GEOLOCATION:
+    case blink::PermissionType::GEOLOCATION_APPROXIMATE:
+      return SOFIK_PERMISSION_GEOLOCATION;
+    case blink::PermissionType::NOTIFICATIONS:
+      return SOFIK_PERMISSION_NOTIFICATIONS;
+    case blink::PermissionType::CLIPBOARD_READ_WRITE:
+    case blink::PermissionType::CLIPBOARD_SANITIZED_WRITE:
+      return SOFIK_PERMISSION_CLIPBOARD;
+    case blink::PermissionType::DISPLAY_CAPTURE:
+      return SOFIK_PERMISSION_SCREEN_CAPTURE;
+    default:
+      return 0;
+  }
+}
+
+}  // namespace
+
+View::PermissionRequest::PermissionRequest() = default;
+View::PermissionRequest::PermissionRequest(PermissionRequest&&) = default;
+View::PermissionRequest::~PermissionRequest() = default;
+
+void View::OnPermissionsRequested(
+    const GURL& origin,
+    const std::vector<blink::PermissionType>& types,
+    PermissionCallback callback) {
+  uint32_t asked = 0;
+  for (blink::PermissionType type : types) {
+    asked |= ToSofikPermission(type);
+  }
+  if (!callbacks_.on_permission_request || asked == 0) {
+    // Nobody to ask, or nothing the host could name: the prompt is dismissed,
+    // which is neither a grant nor a refusal the page can hold against us.
+    std::move(callback).Run(std::vector<blink::mojom::PermissionStatus>(
+        types.size(), blink::mojom::PermissionStatus::ASK));
+    return;
+  }
+  const uint32_t request = next_request_++;
+  PermissionRequest pending;
+  pending.types = types;
+  pending.callback = std::move(callback);
+  permissions_.emplace(request, std::move(pending));
+  callbacks_.on_permission_request(user_, id_, request, origin.spec().c_str(),
+                                   asked);
+}
+
+void View::AnswerPermission(uint32_t request, uint32_t granted) {
+  auto found = permissions_.find(request);
+  if (found == permissions_.end()) {
+    return;
+  }
+  PermissionRequest pending = std::move(found->second);
+  permissions_.erase(found);
+  std::vector<blink::mojom::PermissionStatus> statuses;
+  for (blink::PermissionType type : pending.types) {
+    const uint32_t bit = ToSofikPermission(type);
+    statuses.push_back(bit && (granted & bit)
+                           ? blink::mojom::PermissionStatus::GRANTED
+                           : blink::mojom::PermissionStatus::DENIED);
+  }
+  std::move(pending.callback).Run(statuses);
+}
+
 void View::CancelDownload(uint32_t download) {
   if (!contents_) {
     return;
@@ -841,6 +919,13 @@ void sofik_view_answer_dialog(sofik_view_id id, uint32_t request, int accepted,
                               const char* prompt) {
   if (sofik::View* view = Find(id)) {
     view->AnswerDialog(request, accepted != 0, prompt ? prompt : "");
+  }
+}
+
+void sofik_view_answer_permission(sofik_view_id id, uint32_t request,
+                                  uint32_t granted) {
+  if (sofik::View* view = Find(id)) {
+    view->AnswerPermission(request, granted);
   }
 }
 

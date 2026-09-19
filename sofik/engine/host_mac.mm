@@ -233,6 +233,16 @@ static void OnDialog(void*, sofik_view_id view, uint32_t request,
                              kind == SOFIK_DIALOG_PROMPT ? "Sofik" : NULL);
   });
 }
+static void OnPermission(void*, sofik_view_id view, uint32_t request,
+                         const char* origin, uint32_t permissions) {
+  // This host allows notifications and nothing else.
+  uint32_t granted = permissions & SOFIK_PERMISSION_NOTIFICATIONS;
+  NSLog(@"sofik host: permission origin=%s asked=0x%x granted=0x%x", origin,
+        permissions, granted);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    sofik_view_answer_permission(view, request, granted);
+  });
+}
 static void OnPopup(void*, sofik_view_id, const char* url, int gesture) {
   NSLog(@"sofik host: popup requested %s gesture=%d", url, gesture);
 }
@@ -315,6 +325,7 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     callbacks.on_download_updated = OnDownloadUpdated;
   }
   callbacks.on_popup_requested = OnPopup;
+  callbacks.on_permission_request = OnPermission;
 
   sofik_view_config config = {};
   config.url = self.url.UTF8String;

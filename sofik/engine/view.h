@@ -76,6 +76,7 @@ class View : public content::WebContentsObserver,
 
   void AnswerDialog(uint32_t request, bool accepted, const std::string& prompt);
   void CancelDownload(uint32_t download);
+  void AnswerPermission(uint32_t request, uint32_t granted);
 
   void CdpAttach(sofik_cdp_callback callback, void* user);
   void CdpSend(const std::string& message);
@@ -131,6 +132,9 @@ class View : public content::WebContentsObserver,
   // headless::HeadlessEmbedderDelegate:
   bool OnNewWindowRequested(const GURL& url, bool user_gesture) override;
   content::JavaScriptDialogManager* GetJavaScriptDialogManager() override;
+  void OnPermissionsRequested(const GURL& origin,
+                              const std::vector<blink::PermissionType>& types,
+                              PermissionCallback callback) override;
 
   // content::JavaScriptDialogManager:
   void RunJavaScriptDialog(content::WebContents* web_contents,
@@ -172,6 +176,15 @@ class View : public content::WebContentsObserver,
 
   // Dialogs the page is blocked on, by the request number given to the host.
   std::map<uint32_t, DialogClosedCallback> dialogs_;
+  // Permission prompts awaiting the host, with the types each one asked for.
+  struct PermissionRequest {
+    PermissionRequest();
+    PermissionRequest(PermissionRequest&&);
+    ~PermissionRequest();
+    std::vector<blink::PermissionType> types;
+    PermissionCallback callback;
+  };
+  std::map<uint32_t, PermissionRequest> permissions_;
   uint32_t next_request_ = 1;
 
   scoped_refptr<content::DevToolsAgentHost> cdp_host_;

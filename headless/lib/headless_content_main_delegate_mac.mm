@@ -11,6 +11,13 @@
 namespace headless {
 
 void HeadlessContentMainDelegate::PlatformPreBrowserMain() {
+  // Sofik: embedded, NSApp is the host application's and stays that way. The
+  // rest of this function would refuse any NSApplication but headless's own
+  // and then take the host out of the Dock.
+  if (embedder_owns_message_loop_) {
+    return;
+  }
+
   // Force the NSApplication subclass to be used.
   [HeadlessShellCrApplication sharedApplication];
 

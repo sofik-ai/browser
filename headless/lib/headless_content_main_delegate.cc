@@ -460,10 +460,25 @@ HeadlessContentMainDelegate::RunProcess(
       << "content::BrowserMainRunner::Initialize failed in "
          "HeadlessContentMainDelegate::RunProcess";
 
+  if (embedder_owns_message_loop_) {
+    // Sofik: the host's loop runs the browser from here. See the header.
+    embedded_browser_runner_ = std::move(browser_runner);
+    return 0;
+  }
+
   browser_runner->Run();
   browser_runner->Shutdown();
 
   return browser_->exit_code();
+}
+
+void HeadlessContentMainDelegate::ShutdownEmbeddedBrowser() {
+  if (!embedded_browser_runner_) {
+    return;
+  }
+  browser_->Shutdown();
+  embedded_browser_runner_->Shutdown();
+  embedded_browser_runner_.reset();
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)

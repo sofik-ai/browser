@@ -23,6 +23,10 @@ namespace base {
 class CommandLine;
 }  // namespace base
 
+namespace content {
+class BrowserMainRunner;
+}  // namespace content
+
 namespace headless {
 
 namespace features {
@@ -44,6 +48,20 @@ class HEADLESS_EXPORT HeadlessContentMainDelegate
       delete;
 
   ~HeadlessContentMainDelegate() override;
+
+  // Sofik: embedded mode, for //sofik/engine.
+  //
+  // Headless assumes it owns the process: RunProcess() initialises the browser
+  // and then blocks in BrowserMainRunner::Run() until shutdown. Inside an
+  // application the main loop belongs to the host (AppKit, under Flutter), so
+  // in this mode RunProcess() stops once the browser is initialised and hands
+  // the runner over; the host's loop drives it from there, and
+  // ShutdownEmbeddedBrowser() is what Run() returning would have been.
+  void set_embedder_owns_message_loop(bool value) {
+    embedder_owns_message_loop_ = value;
+  }
+  HeadlessBrowserImpl* embedded_browser() const { return browser_.get(); }
+  void ShutdownEmbeddedBrowser();
 
  private:
   // content::ContentMainDelegate implementation:
@@ -91,6 +109,9 @@ class HEADLESS_EXPORT HeadlessContentMainDelegate
   // Other clients may retain pointers to browser, so it should come
   // first.
   std::unique_ptr<HeadlessBrowserImpl> const browser_;
+
+  bool embedder_owns_message_loop_ = false;
+  std::unique_ptr<content::BrowserMainRunner> embedded_browser_runner_;
 
   std::unique_ptr<content::ContentRendererClient> renderer_client_;
   std::unique_ptr<content::ContentBrowserClient> browser_client_;

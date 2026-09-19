@@ -1,0 +1,116 @@
+name: CI
+
+on:
+    push:
+        branches: ["main"]
+    pull_request:
+        branches: ["main"]
+
+    # Allows you to run this workflow manually from the Actions tab
+    workflow_dispatch:
+
+jobs:
+    browser-macos:
+        name: Test Browser on macOS
+        runs-on: macos-latest
+        env:
+            GITHUB_ACTIONS_OUTPUT: ""
+        strategy:
+            fail-fast: false
+            matrix:
+                browser: [safari]
+                suite: [default, disabled, main]
+        steps:
+
+            - &checkout-branch
+              name: Checkout Branch
+              uses: actions/checkout@v5
+
+            - &setup-node
+              name: Setup Node
+              uses: actions/setup-node@v5
+              with:
+                  node-version-file: package.json
+                  cache: npm
+
+            - &install-node-packages
+              name: Install Node Packages
+              run: npm ci
+
+            - name: Run Tests
+              run: |
+                  echo "Running in $BROWSER"
+                  npm run test:${{ matrix.browser }} -- ${{ matrix.suite }}
+
+    browser-linux:
+        name: Test Browser on Linux
+        runs-on: ubuntu-latest
+        env:
+            GITHUB_ACTIONS_OUTPUT: ""
+        strategy:
+            fail-fast: false
+            matrix:
+                browser: [chrome, firefox]
+                suite: [default, disabled, main]
+        steps:
+            - *checkout-branch
+            - *setup-node
+            - *install-node-packages
+            - name: Run Tests
+              run: |
+                  echo "Running in $BROWSER"
+                  npm run test:${{ matrix.browser }} -- ${{ matrix.suite }}
+    shell:
+        name: Test Shell
+        runs-on: ubuntu-latest
+        env:
+            GITHUB_ACTIONS_OUTPUT: ""
+        strategy:
+            fail-fast: false
+            matrix:
+                shell: [jsc, spidermonkey, v8]
+                suite: [default, disabled, main]
+        steps:
+            - *checkout-branch
+            - *setup-node
+            - *install-node-packages
+
+            - name: Extract Week Number
+              run: echo "WEEK_NUMBER=$(date +%W)" >> $GITHUB_ENV
+
+            - name: Cache jsvu Binaries 
+              uses: actions/cache@v4
+              with:
+                path: ~/.jsvu
+                key: ${{ runner.os }}-jsvu-${{ matrix.shell }}-week-${{ env.WEEK_NUMBER }}
+
+            - name: Run Tests
+              run: |
+                  echo "Running in $BROWSER"
+                  npm run test:${{ matrix.shell }} -- ${{ matrix.suite }}
+    build:
+        name: Test Build 
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Branch
+              uses: actions/checkout@v4
+              with:
+                fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
+
+            - *setup-node
+            - *install-node-packages
+
+            - name: Run License Checks
+              run: npm run test:license
+
+            - name: Run in-depth.html validation
+              run: npm run test:in-depth
+
+            - name: Run Build
+              run: |
+                  if ${{ github.event_name == 'pull_request' }}; then
+                    npm run test:build -- --diff="HEAD^...HEAD"
+                  else
+                    npm run test:build -- --diff="${{ github.event.before }}...${{ github.event.after }}"
+                  fi
+

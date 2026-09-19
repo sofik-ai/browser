@@ -1,0 +1,13 @@
+Name: Web-tests for CrossBench
+Short Name: crossbench-web-tests
+URL: https://chromium.googlesource.com/chromium/web-tests
+Version: N/A
+Revision: DEPS
+Update Mechanism: Autoroll
+License: BSD-3-Clause, MIT
+License File: LICENSE
+Security Critical: No
+Shipped: no
+
+Description:
+Definitions for CUJs and benchmarks built on top of Crossbench.

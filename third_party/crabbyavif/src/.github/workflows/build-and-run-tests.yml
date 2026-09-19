@@ -1,0 +1,52 @@
+name: Build and Run Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+# Cancel the workflow if a new one is triggered from the same PR, branch, or tag, except on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-and-run-tests:
+    name: "Build and Run Tests on ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - uses: ./.github/actions/setup-deps
+
+    - name: Build and run the Rust tests
+      run: cargo test
+
+    - name: Build and run the C++ tests
+      # TODO: This step fails on macos. So run it on linux only for now.
+      if: runner.os == 'Linux'
+      run: |
+        cargo build --features capi,aom --release
+        cmake -S c_api_tests -B c_build
+        make -C c_build
+        ctest --test-dir c_build
+
+
+    - name: Build and run the heic tests with heic feature enabled
+      run: cargo test --features heic heic
+
+    - name: Build and run all the tests with aom feature enabled
+      # TODO: Enable this for windows.
+      if: runner.os != 'Windows'
+      run: cargo test --features aom

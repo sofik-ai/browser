@@ -1,0 +1,35 @@
+name: Build and Run Tests (Experimental Features)
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+# Cancel the workflow if a new one is triggered from the same PR, branch, or tag, except on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-and-run-tests-experimental-features:
+    name: "Build and Run Tests on ${{ matrix.os }} (Experimental Features)"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest] # TODO: Enable this for windows-latest
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - uses: ./.github/actions/setup-deps
+
+    - name: Build and run the Rust tests
+      # Enable encoder and C API for better coverage.
+      run: cargo test --features aom,capi

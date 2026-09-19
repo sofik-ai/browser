@@ -1,0 +1,16 @@
+# Copyright 2026 Sofik. All rights reserved.
+
+import("//build/config/features.gni")
+
+source_set("sofik") {
+  sources = [
+    "identity.cc",
+    "identity.h",
+  ]
+
+  deps = [
+    "//base",
+    "//base:i18n",
+    "//third_party/icu",
+  ]
+}

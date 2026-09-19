@@ -1,0 +1,9 @@
+Name: A Faroese spellchecking dictionary
+URL: http://www.stava.fo/
+Version: 1.0
+Update Mechanism: Manual (https://crbug.com/422924606)
+License File: LICENSE_en_US.txt
+Security Critical: no
+Shipped: yes
+Description:
+This folder contains a partial copy of the Faroese dictionary for hunspell. It consists of a dictionary file, an affix file, and a license file. (It does not include installation scripts used by Firefox.)

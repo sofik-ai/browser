@@ -1,0 +1,19 @@
+name: Rustfmt
+on: pull_request
+
+jobs:
+  rustfmt:
+    name: "Rustfmt"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
+        with:
+          toolchain: nightly
+          override: true
+          components: rustfmt
+      - uses: LoliGothick/rustfmt-check@995f4ad3416208c983ed97d4d4b66b33446a7bc3 # v0.5.0
+        with:
+            token: ${{ secrets.GITHUB_TOKEN }}

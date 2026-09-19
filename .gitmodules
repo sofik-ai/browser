@@ -1,0 +1,57 @@
+[submodule "cef"]
+	path = cef
+	url = https://github.com/sofik-ai/cef.git
+[submodule "third_party/angle"]
+	path = third_party/angle
+	url = https://github.com/sofik-ai/browser-angle.git
+[submodule "third_party/blink"]
+	path = third_party/blink
+	url = https://github.com/sofik-ai/blink.git
+[submodule "third_party/boringssl/src"]
+	path = third_party/boringssl/src
+	url = https://github.com/sofik-ai/browser-boringssl.git
+[submodule "third_party/catapult"]
+	path = third_party/catapult
+	url = https://github.com/sofik-ai/browser-catapult.git
+[submodule "third_party/dawn"]
+	path = third_party/dawn
+	url = https://github.com/sofik-ai/browser-dawn.git
+[submodule "third_party/devtools-frontend/src"]
+	path = third_party/devtools-frontend/src
+	url = https://github.com/sofik-ai/browser-devtools-frontend.git
+[submodule "third_party/ffmpeg"]
+	path = third_party/ffmpeg
+	url = https://github.com/sofik-ai/browser-ffmpeg.git
+[submodule "third_party/icu"]
+	path = third_party/icu
+	url = https://github.com/sofik-ai/browser-icu.git
+[submodule "third_party/libaom/source/libaom"]
+	path = third_party/libaom/source/libaom
+	url = https://github.com/sofik-ai/browser-libaom.git
+[submodule "third_party/openscreen/src"]
+	path = third_party/openscreen/src
+	url = https://github.com/sofik-ai/browser-openscreen.git
+[submodule "third_party/pdfium"]
+	path = third_party/pdfium
+	url = https://github.com/sofik-ai/browser-pdfium.git
+[submodule "third_party/perfetto"]
+	path = third_party/perfetto
+	url = https://github.com/sofik-ai/browser-perfetto.git
+[submodule "third_party/skia"]
+	path = third_party/skia
+	url = https://github.com/sofik-ai/browser-skia.git
+[submodule "third_party/swiftshader"]
+	path = third_party/swiftshader
+	url = https://github.com/sofik-ai/browser-swiftshader.git
+[submodule "third_party/tflite/src"]
+	path = third_party/tflite/src
+	url = https://github.com/sofik-ai/browser-tflite.git
+[submodule "third_party/webrtc"]
+	path = third_party/webrtc
+	url = https://github.com/sofik-ai/browser-webrtc.git
+[submodule "third_party/xnnpack/src"]
+	path = third_party/xnnpack/src
+	url = https://github.com/sofik-ai/browser-xnnpack.git
+[submodule "v8"]
+	path = v8
+	url = https://github.com/sofik-ai/v8.git

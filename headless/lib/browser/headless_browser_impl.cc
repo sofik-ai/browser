@@ -77,11 +77,24 @@ const base::FilePath::CharType kLocalStateFilename[] =
     FILE_PATH_LITERAL("Local State");
 #endif
 
+bool g_use_browser_identity = false;
+
 }  // namespace
 
+// static
+void HeadlessBrowser::UseBrowserIdentity() {
+  g_use_browser_identity = true;
+}
+
 HeadlessBrowser::Options::Options()
-    : user_agent(embedder_support::BuildUnifiedPlatformUserAgentFromProduct(
-          HeadlessBrowser::GetProductNameAndVersion())) {}
+    // Sofik: embedder_support::GetUserAgent() is the string Chrome itself
+    // sends, reduced version and all (Chrome/149.0.0.0); building one from a
+    // product token would put the full build number back in it.
+    : user_agent(g_use_browser_identity
+                     ? embedder_support::GetUserAgent()
+                     : embedder_support::
+                           BuildUnifiedPlatformUserAgentFromProduct(
+                               HeadlessBrowser::GetProductNameAndVersion())) {}
 
 HeadlessBrowser::Options::Options(Options&& options) = default;
 
@@ -96,12 +109,19 @@ bool HeadlessBrowser::Options::DevtoolsServerEnabled() {
 
 /// static
 std::string HeadlessBrowser::GetProductNameAndVersion() {
-  return std::string(kHeadlessProductName) + "/" + PRODUCT_VERSION;
+  // Sofik: this is also what ContentBrowserClient::GetProduct() returns, and
+  // so what embedder_support::GetUserAgent() builds the string around.
+  return std::string(g_use_browser_identity ? "Chrome" : kHeadlessProductName) +
+         "/" + PRODUCT_VERSION;
 }
 
 /// static
 blink::UserAgentMetadata HeadlessBrowser::GetUserAgentMetadata() {
   auto metadata = embedder_support::GetUserAgentMetadata();
+  if (g_use_browser_identity) {
+    // Sofik: already carries the brands sofik::Identity chose.
+    return metadata;
+  }
   // Skip override brand version information if components' API returns a blank
   // UserAgentMetadata.
   if (metadata == blink::UserAgentMetadata()) {

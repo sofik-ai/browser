@@ -174,6 +174,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property BOOL inputTest;
 @property BOOL dialogTest;
 @property(copy) NSString* downloadDir;
+@property(copy) NSString* evalExpression;
 @property int frames;
 @end
 
@@ -268,6 +269,11 @@ static void OnDownloadUpdated(void*, sofik_view_id, const sofik_download* d) {
 }
 static void OnCdp(void*, sofik_view_id, const char* message) {
   NSString* text = @(message);
+  if (g_host.evalExpression) {
+    printf("%s\n", message);
+    fflush(stdout);
+    return;
+  }
   NSLog(@"sofik host: cdp %@",
         text.length > 300 ? [text substringToIndex:300] : text);
 }
@@ -339,6 +345,36 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     return;
   }
   sofik_view_set_focus(g_view, 1);
+
+  if (self.evalExpression) {
+    // Runs one expression in the page over DevTools and prints the reply.
+    sofik_view_cdp_attach(g_view, OnCdp, nullptr);
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, self.shotAfterMs * NSEC_PER_MSEC),
+        dispatch_get_main_queue(), ^{
+          NSDictionary* message = @{
+            @"id" : @11,
+            @"method" : @"Runtime.evaluate",
+            @"params" : @{
+              @"expression" : self.evalExpression,
+              @"awaitPromise" : @YES,
+              @"returnByValue" : @YES
+            }
+          };
+          NSData* json = [NSJSONSerialization dataWithJSONObject:message
+                                                         options:0
+                                                           error:nil];
+          NSString* text = [[NSString alloc] initWithData:json
+                                                 encoding:NSUTF8StringEncoding];
+          sofik_view_cdp_send(g_view, text.UTF8String);
+        });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (self.shotAfterMs + 1500) * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+                     [NSApp terminate:nil];
+                   });
+    return;
+  }
 
   if (self.downloadDir) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4000 * NSEC_PER_MSEC),
@@ -474,6 +510,8 @@ int main(int argc, const char** argv) {
       NSString* arg = @(argv[i]);
       if ([arg hasPrefix:@"--shot="]) {
         g_host.shotPath = [arg substringFromIndex:7];
+      } else if ([arg hasPrefix:@"--eval="]) {
+        g_host.evalExpression = [arg substringFromIndex:7];
       } else if ([arg hasPrefix:@"--download-test="]) {
         g_host.downloadDir = [arg substringFromIndex:16];
       } else if ([arg isEqualToString:@"--dialog-test"]) {

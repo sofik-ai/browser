@@ -72,6 +72,16 @@ class HEADLESS_EXPORT HeadlessBrowser {
   virtual void Shutdown() = 0;
 
   static std::string GetProductNameAndVersion();
+
+  // Sofik: present as the browser this is built from, not as "HeadlessChrome".
+  //
+  // Headless announces itself twice: the product token of its user agent, and
+  // the brand list of Sec-CH-UA / navigator.userAgentData, which it rebuilds
+  // from scratch around its own name -- discarding the brands
+  // embedder_support had produced from sofik::Identity. Embedded in a Browser
+  // Card both have to say what every other Chrome says. Call before the
+  // browser is created.
+  static void UseBrowserIdentity();
   static blink::UserAgentMetadata GetUserAgentMetadata();
 
  protected:

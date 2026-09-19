@@ -139,6 +139,7 @@ int Engine::Initialize(const sofik_settings& settings) {
   // The host owns the main loop; the engine's work has to arrive through it.
   InstallHostLoopMessagePump();
 
+  headless::HeadlessBrowser::UseBrowserIdentity();
   auto browser = std::make_unique<headless::HeadlessBrowserImpl>(
       base::BindOnce(&Engine::OnBrowserStart, base::Unretained(g_engine)));
   g_engine->delegate_ = std::make_unique<headless::HeadlessContentMainDelegate>(

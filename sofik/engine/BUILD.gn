@@ -68,6 +68,14 @@ shared_library("sofik_engine") {
   }
   defines = [ "SOFIK_ENGINE_IMPLEMENTATION" ]
 
+  # The C API and nothing else. Hidden visibility is the default in this
+  # build, but V8 and the Rust runtime mark some 1,400 symbols default, and
+  # they would otherwise become part of what a host can link against -- and
+  # collide with, should the host carry a V8 of its own.
+  if (is_mac) {
+    ldflags = [ "-Wl,-exported_symbol,_sofik_*" ]
+  }
+
   deps = [
     "//base",
     "//components/download/public/common:public",

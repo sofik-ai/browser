@@ -232,9 +232,11 @@ const blink::UserAgentBrandList GetUserAgentBrandFullVersionListInternal(
 // depending on the Reduce User-Agent reduction phase features.
 std::string GetUserAgentInternal() {
   std::string product = GetProductAndVersion();
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(kHeadless)) {
-    product.insert(0, "Headless");
-  }
+  // Sofik: upstream turns "Chrome" into "HeadlessChrome" when --headless is on
+  // the command line, and //headless puts it there for every process it
+  // starts. The Sofik engine stands on //headless and must not say so: the
+  // brand list already claims Google Chrome, and a user agent that disagrees
+  // with it in the same request is the contradiction bot detection looks for.
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(kUseMobileUserAgent)) {

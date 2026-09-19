@@ -4,6 +4,8 @@
 
 #include "headless/lib/browser/headless_request_context_manager.h"
 
+#include "net/http/http_util.h"
+
 #include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
@@ -223,7 +225,11 @@ void HeadlessRequestContextManager::ConfigureNetworkContextParamsInternal(
     ::cert_verifier::mojom::CertVerifierCreationParams*
         cert_verifier_creation_params) {
   context_params->user_agent = user_agent_;
-  context_params->accept_language = accept_language_;
+  // Sofik: the list becomes a header here, and Chrome's carries q-values
+  // (pt-BR,pt;q=0.9,en-US;q=0.8). Sent bare, as headless does, it is a valid
+  // header that no real Chrome produces.
+  context_params->accept_language =
+      net::HttpUtil::GenerateAcceptLanguageHeader(accept_language_);
   context_params->enable_zstd = true;
 
   const base::CommandLine& command_line =

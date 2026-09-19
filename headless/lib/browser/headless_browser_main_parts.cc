@@ -26,8 +26,13 @@ HeadlessBrowserMainParts::~HeadlessBrowserMainParts() = default;
 
 int HeadlessBrowserMainParts::PreMainMessageLoopRun() {
   SetHeadlessClipboardForCurrentThread();
-  screen_orientation_delegate_ =
-      std::make_unique<HeadlessScreenOrientationDelegate>();
+  // Sofik: the delegate rotates the headless screen, and casts whatever
+  // screen is installed to one. An embedded browser is on the real monitor,
+  // which no page can rotate -- desktop Chrome rejects orientation.lock() too.
+  if (!HeadlessBrowser::UsesBrowserIdentity()) {
+    screen_orientation_delegate_ =
+        std::make_unique<HeadlessScreenOrientationDelegate>();
+  }
   browser_->PreMainMessageLoopRun();
   MaybeStartLocalDevToolsHttpHandler();
   HeadlessSelectFileDialogFactory::SetUp();

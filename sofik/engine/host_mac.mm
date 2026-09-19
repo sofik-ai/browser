@@ -7,6 +7,7 @@
 //
 //   sofik_engine_host [--shot=/path.png --after-ms=4000] <url>
 //   sofik_engine_host --input-test <url of a page with a report() function>
+//   sofik_engine_host --view-test [--shot=PNG] <url of test/view_test.html>
 
 #import <Cocoa/Cocoa.h>
 #import <IOSurface/IOSurface.h>
@@ -173,6 +174,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property int shotAfterMs;
 @property BOOL inputTest;
 @property BOOL dialogTest;
+@property BOOL viewTest;
 @property(copy) NSString* downloadDir;
 @property(copy) NSString* evalExpression;
 @property int frames;
@@ -267,6 +269,26 @@ static void OnDownloadUpdated(void*, sofik_view_id, const sofik_download* d) {
           d->received_bytes, @(d->path));
   }
 }
+static void OnCursor(void*, sofik_view_id, sofik_cursor cursor) {
+  NSLog(@"sofik host: cursor %d", cursor);
+  NSCursor* shown = cursor == SOFIK_CURSOR_HAND    ? NSCursor.pointingHandCursor
+                    : cursor == SOFIK_CURSOR_IBEAM ? NSCursor.IBeamCursor
+                    : cursor == SOFIK_CURSOR_CROSS ? NSCursor.crosshairCursor
+                                                   : NSCursor.arrowCursor;
+  [shown set];
+}
+static void OnTooltip(void*, sofik_view_id, const char* text) {
+  NSLog(@"sofik host: tooltip [%@]", @(text));
+  g_host.page.toolTip = *text ? @(text) : nil;
+}
+static void OnFocusedNode(void*, sofik_view_id, int editable, sofik_rect caret) {
+  NSLog(@"sofik host: focus editable=%d caret=%d,%d %dx%d", editable, caret.x,
+        caret.y, caret.width, caret.height);
+}
+static void OnImeBounds(void*, sofik_view_id, sofik_rect bounds) {
+  NSLog(@"sofik host: ime bounds=%d,%d %dx%d", bounds.x, bounds.y, bounds.width,
+        bounds.height);
+}
 static void OnCdp(void*, sofik_view_id, const char* message) {
   NSString* text = @(message);
   if (g_host.evalExpression) {
@@ -331,6 +353,10 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     callbacks.on_download_updated = OnDownloadUpdated;
   }
   callbacks.on_popup_requested = OnPopup;
+  callbacks.on_cursor = OnCursor;
+  callbacks.on_tooltip = OnTooltip;
+  callbacks.on_focused_node_changed = OnFocusedNode;
+  callbacks.on_ime_composition_bounds = OnImeBounds;
   callbacks.on_permission_request = OnPermission;
 
   sofik_view_config config = {};
@@ -338,6 +364,7 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   config.width = frame.size.width;
   config.height = frame.size.height;
   config.prefer_gpu_frames = 1;
+  config.device_scale_factor = self.window.backingScaleFactor;
   g_view = sofik_view_create(&config, &callbacks, nullptr);
   if (!g_view) {
     NSLog(@"sofik host: could not create the view");
@@ -404,6 +431,53 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     after(4300, ^{
       [NSApp terminate:nil];
     });
+    return;
+  }
+
+  if (self.viewTest) {
+    // Everything a native view would have done by itself: the cursor, the
+    // tooltip, the caret, an input method, a <select>, the scale.
+    sofik_view_cdp_attach(g_view, OnCdp, nullptr);
+    auto after = ^(int ms, dispatch_block_t block) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ms * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), block);
+    };
+    auto click = ^(int x, int y) {
+      sofik_view_mouse_move(g_view, x, y, 0, 0);
+      sofik_view_mouse_button(g_view, x, y, SOFIK_BUTTON_LEFT, 0, 1,
+                              SOFIK_MOD_LEFT_BUTTON);
+      sofik_view_mouse_button(g_view, x, y, SOFIK_BUTTON_LEFT, 1, 1, 0);
+    };
+    auto report = ^{
+      sofik_view_cdp_send(g_view,
+                          "{\"id\":5,\"method\":\"Runtime.evaluate\","
+                          "\"params\":{\"expression\":\"report()\"}}");
+    };
+    after(1500, ^{
+      sofik_view_mouse_move(g_view, 50, 30, 0, 0);
+      sofik_view_mouse_move(g_view, 60, 35, 0, 0);
+    });
+    after(2200, ^{ click(60, 92); });
+    after(2600, ^{ sofik_view_ime_set_composition(g_view, "ol", 2, 2); });
+    after(2900, ^{ sofik_view_ime_commit(g_view, "ol\xc3\xa1"); });
+    after(3300, ^{ click(60, 154); });
+    after(4000, ^{
+      if (self.shotPath) [self snapshot];
+      // Down, then Enter: the drop-down has the keyboard.
+      sofik_view_key(g_view, SOFIK_KEY_RAW_DOWN, 40, 125, 0, 0);
+      sofik_view_key(g_view, SOFIK_KEY_UP, 40, 125, 0, 0);
+      sofik_view_key(g_view, SOFIK_KEY_RAW_DOWN, 13, 36, 0, 0);
+      sofik_view_key(g_view, SOFIK_KEY_CHAR, 13, 36, '\r', 0);
+      sofik_view_key(g_view, SOFIK_KEY_UP, 13, 36, 0, 0);
+    });
+    after(4600, report);
+    // The window "moves" to a monitor of another density.
+    after(4900, ^{
+      sofik_view_set_scale(g_view,
+                           self.window.backingScaleFactor > 1 ? 1.0f : 2.0f);
+    });
+    after(5500, report);
+    after(6000, ^{ [NSApp terminate:nil]; });
     return;
   }
 
@@ -516,6 +590,8 @@ int main(int argc, const char** argv) {
         g_host.downloadDir = [arg substringFromIndex:16];
       } else if ([arg isEqualToString:@"--dialog-test"]) {
         g_host.dialogTest = YES;
+      } else if ([arg isEqualToString:@"--view-test"]) {
+        g_host.viewTest = YES;
       } else if ([arg isEqualToString:@"--input-test"]) {
         g_host.inputTest = YES;
       } else if ([arg hasPrefix:@"--after-ms="]) {

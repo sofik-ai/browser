@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Driven by `sofik_engine_host --view-test`: fixed positions, so the host
+     can aim at them without asking the page where things are. -->
+<meta charset="utf-8">
+<title>view test</title>
+<body style="margin:0;font:14px sans-serif">
+<a id="a" href="#" title="uma dica"
+   style="position:absolute;left:20px;top:20px;width:160px;height:30px;display:block">um link</a>
+<input id="i" style="position:absolute;left:20px;top:80px;width:200px;height:24px">
+<select id="s" style="position:absolute;left:20px;top:140px;width:200px;height:28px">
+  <option>um</option><option>dois</option><option>tres</option>
+</select>
+<script>
+function report() {
+  return JSON.stringify({input: i.value, select: s.value,
+                         dpr: devicePixelRatio, width: innerWidth,
+                         screen: screen.width + "x" + screen.height});
+}
+</script>

@@ -204,6 +204,16 @@ void HeadlessContentBrowserClient::OverrideWebPreferences(
     blink::web_pref::WebPreferences* prefs) {
   prefs->lazy_load_enabled = browser_->options()->lazy_load_enabled;
 
+#if BUILDFLAG(IS_MAC)
+  // Sofik: on macOS a <select> is a native NSMenu, opened by the browser
+  // process next to the page's NSView. A page with no native view has nowhere
+  // to open one, so its drop-downs have to be drawn by the renderer, as they
+  // are on every other platform.
+  if (web_contents && !web_contents->GetNativeView()) {
+    prefs->should_disable_external_popups = true;
+  }
+#endif
+
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           ::switches::kForceHighContrast)) {
     prefs->in_forced_colors = true;

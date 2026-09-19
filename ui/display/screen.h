@@ -258,6 +258,14 @@ class DISPLAY_EXPORT Screen {
 // ScopedNativeScreen.
 DISPLAY_EXPORT Screen* CreateNativeScreen();
 
+#if BUILDFLAG(IS_MAC)
+// Sofik: the monitors that are really there, even under --headless, where
+// CreateNativeScreen() makes up an 800x600 one. An embedded browser runs with
+// that switch for what it does to the GPU and the compositor, not because its
+// host has no display.
+DISPLAY_EXPORT Screen* CreatePhysicalScreen();
+#endif
+
 #if BUILDFLAG(IS_IOS)
 // Returns the internal display device scale factor. This should only
 // be used for loading resources at startup before Screen is initialized.

@@ -16,6 +16,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "headless/public/headless_embedder_delegate.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "sofik/engine/offscreen_view.h"
 #include "sofik/engine/sofik_engine.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -37,7 +38,8 @@ class View : public content::WebContentsObserver,
              public viz::mojom::FrameSinkVideoConsumer,
              public content::DevToolsAgentHostClient,
              public headless::HeadlessEmbedderDelegate,
-             public content::JavaScriptDialogManager {
+             public content::JavaScriptDialogManager,
+             public OffscreenViewDelegate {
  public:
   static std::unique_ptr<View> Create(sofik_view_id id,
                                       headless::HeadlessBrowserContext* context,
@@ -55,6 +57,7 @@ class View : public content::WebContentsObserver,
   content::WebContents* web_contents() const;
 
   void Resize(const gfx::Size& size_dips);
+  void SetScale(float scale);
   void SetVisible(bool visible);
   void SetFocus(bool focused);
   void Invalidate();
@@ -74,6 +77,11 @@ class View : public content::WebContentsObserver,
   void Key(sofik_key_type type, int windows_key_code, int native_key_code,
            uint32_t character, uint32_t modifiers);
 
+  void ImeSetComposition(const std::string& text, int selection_start,
+                         int selection_end);
+  void ImeCommit(const std::string& text);
+  void ImeCancel();
+
   void AnswerDialog(uint32_t request, bool accepted, const std::string& prompt);
   void CancelDownload(uint32_t download);
   void AnswerPermission(uint32_t request, uint32_t granted);
@@ -85,11 +93,13 @@ class View : public content::WebContentsObserver,
  private:
   View(sofik_view_id id,
        headless::HeadlessWebContentsImpl* contents,
+       OffscreenContentsView* contents_view,
        const sofik_view_config& config,
        const sofik_view_callbacks& callbacks,
        void* user);
 
-  content::RenderWidgetHost* widget() const;
+  // The page's widget view; null while the renderer is gone.
+  OffscreenView* page_view() const;
   void StartCapture();
   void ApplyCaptureSize();
   void ReportLoadingState();
@@ -154,6 +164,13 @@ class View : public content::WebContentsObserver,
   void CancelDialogs(content::WebContents* web_contents,
                      bool reset_state) override;
 
+  // OffscreenViewDelegate:
+  void OnCursorChanged(const ui::Cursor& cursor) override;
+  void OnTooltipChanged(const std::u16string& text) override;
+  void OnTextInputStateChanged(bool is_editable,
+                               const gfx::Rect& caret) override;
+  void OnImeCompositionBoundsChanged(const gfx::Rect& bounds) override;
+
   // content::DevToolsAgentHostClient:
   void DispatchProtocolMessage(content::DevToolsAgentHost* host,
                                base::span<const uint8_t> message) override;
@@ -161,11 +178,16 @@ class View : public content::WebContentsObserver,
 
   const sofik_view_id id_;
   raw_ptr<headless::HeadlessWebContentsImpl> contents_;
+  // Owned by the web contents, so gone with it.
+  raw_ptr<OffscreenContentsView> contents_view_;
   const sofik_view_callbacks callbacks_;
   const raw_ptr<void> user_;
   const bool prefer_gpu_frames_;
   const int frame_rate_;
   gfx::Size size_dips_;
+  // What the host was last told, so that it hears changes only.
+  int last_cursor_ = -1;
+  std::u16string last_tooltip_;
 
   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;
   // The callbacks of the GPU frame the host is showing. Releasing them lets

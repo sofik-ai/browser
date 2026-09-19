@@ -400,6 +400,9 @@ class HeadlessWebContentsImpl::PendingFrame final
 std::unique_ptr<HeadlessWebContentsImpl> HeadlessWebContentsImpl::Create(
     HeadlessWebContents::Builder* builder) {
   content::WebContents::CreateParams create_params(builder->browser_context_);
+  if (builder->create_params_callback_) {
+    std::move(builder->create_params_callback_).Run(&create_params);
+  }
   auto headless_web_contents = base::WrapUnique(
       new HeadlessWebContentsImpl(content::WebContents::Create(create_params)));
 
@@ -631,6 +634,13 @@ HeadlessWebContents::Builder&
 HeadlessWebContents::Builder::SetEnableBeginFrameControl(
     bool enable_begin_frame_control) {
   enable_begin_frame_control_ = enable_begin_frame_control;
+  return *this;
+}
+
+HeadlessWebContents::Builder&
+HeadlessWebContents::Builder::SetCreateParamsCallback(
+    CreateParamsCallback callback) {
+  create_params_callback_ = std::move(callback);
   return *this;
 }
 

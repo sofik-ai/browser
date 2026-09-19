@@ -1,0 +1,14 @@
+<!doctype html><meta charset=utf-8><title>input test</title>
+<style>body{margin:0;font:16px system-ui}#box{position:absolute;left:20px;top:20px;width:300px;height:30px}#tall{height:4000px}</style>
+<input id=box autocomplete=off><div id=tall></div>
+<script>
+const log={moves:0,down:0,up:0,click:0,keys:[],codes:[],wheel:0,focused:false};
+addEventListener('mousemove',()=>log.moves++);
+addEventListener('mousedown',()=>log.down++);
+addEventListener('mouseup',()=>log.up++);
+addEventListener('click',()=>log.click++);
+addEventListener('wheel',()=>log.wheel++);
+box.addEventListener('focus',()=>log.focused=true);
+addEventListener('keydown',e=>{log.keys.push(e.key);log.codes.push(e.code)});
+window.report=()=>JSON.stringify({...log,value:box.value,scrollY:Math.round(scrollY),active:document.activeElement.id,hasFocus:document.hasFocus()});
+</script>

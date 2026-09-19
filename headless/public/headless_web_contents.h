@@ -7,8 +7,10 @@
 
 #include <string_view>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/process/kill.h"
+#include "content/public/browser/web_contents.h"
 #include "headless/public/headless_export.h"
 #include "headless/public/headless_window_state.h"
 #include "ui/gfx/geometry/rect.h"
@@ -60,6 +62,13 @@ class HEADLESS_EXPORT HeadlessWebContents::Builder {
   // Specify whether BeginFrames should be controlled via DevTools commands.
   Builder& SetEnableBeginFrameControl(bool enable_begin_frame_control);
 
+  // Sofik: lets an embedder finish the content layer's creation parameters,
+  // which is the only moment a web contents can be given a view of the
+  // embedder's own instead of the platform's.
+  using CreateParamsCallback =
+      base::OnceCallback<void(content::WebContents::CreateParams*)>;
+  Builder& SetCreateParamsCallback(CreateParamsCallback callback);
+
   // The returned object is owned by HeadlessBrowser. Call
   // HeadlessWebContents::Close() to dispose it.
   HeadlessWebContents* Build();
@@ -78,6 +87,7 @@ class HEADLESS_EXPORT HeadlessWebContents::Builder {
   gfx::Rect window_bounds_;
   HeadlessWindowState window_state_ = HeadlessWindowState::kNormal;
   bool enable_begin_frame_control_ = false;
+  CreateParamsCallback create_params_callback_;
 };
 
 }  // namespace headless

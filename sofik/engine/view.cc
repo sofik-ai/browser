@@ -38,10 +38,14 @@
 #include "net/base/net_errors.h"
 #include "sofik/engine/downloads.h"
 #include "sofik/engine/engine.h"
+#include "sofik/engine/offscreen_contents_view.h"
+#include "sofik/engine/offscreen_view.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
+#include "ui/base/cursor/cursor.h"
+#include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event_constants.h"
@@ -120,18 +124,34 @@ std::unique_ptr<View> View::Create(sofik_view_id id,
   const gfx::Size size(config.width > 0 ? config.width : 1280,
                        config.height > 0 ? config.height : 800);
   GURL url(config.url && *config.url ? config.url : "about:blank");
+  const int frame_rate = config.frame_rate > 0 ? config.frame_rate : 60;
+  // The page's first widget view is made inside Build(), so the view that
+  // makes it has to be in place before: it goes in with the parameters the
+  // web contents is created from.
+  OffscreenContentsView* contents_view = nullptr;
   headless::HeadlessWebContents* contents =
       context->CreateWebContentsBuilder()
           .SetInitialURL(url)
           .SetWindowBounds(gfx::Rect(size))
+          .SetCreateParamsCallback(base::BindOnce(
+              [](OffscreenContentsView** out, const gfx::Size& size,
+                 float scale, int frame_rate,
+                 content::WebContents::CreateParams* params) {
+                *out = OffscreenContentsView::Install(params, size, scale,
+                                                      frame_rate);
+              },
+              &contents_view, size, config.device_scale_factor, frame_rate))
           .Build();
   if (!contents) {
     LOG(ERROR) << "sofik: could not create a view for " << url;
     return nullptr;
   }
+  CHECK(contents_view);
+  auto* contents_impl = headless::HeadlessWebContentsImpl::From(contents);
+  contents_view->set_web_contents(contents_impl->web_contents());
   auto view = base::WrapUnique(
-      new View(id, headless::HeadlessWebContentsImpl::From(contents), config,
-               callbacks, user));
+      new View(id, contents_impl, contents_view, config, callbacks, user));
+  contents_view->set_delegate(view.get());
   view->size_dips_ = size;
   view->contents_->set_embedder_delegate(view.get());
   view->StartCapture();
@@ -140,12 +160,14 @@ std::unique_ptr<View> View::Create(sofik_view_id id,
 
 View::View(sofik_view_id id,
            headless::HeadlessWebContentsImpl* contents,
+           OffscreenContentsView* contents_view,
            const sofik_view_config& config,
            const sofik_view_callbacks& callbacks,
            void* user)
     : content::WebContentsObserver(contents->web_contents()),
       id_(id),
       contents_(contents),
+      contents_view_(contents_view),
       callbacks_(callbacks),
       user_(user),
       prefer_gpu_frames_(config.prefer_gpu_frames != 0),
@@ -160,7 +182,9 @@ View::~View() {
   permissions_.clear();
   if (contents_) {
     contents_->set_embedder_delegate(nullptr);
+    contents_view_->set_delegate(nullptr);
   }
+  contents_view_ = nullptr;
   CdpDetach();
   capturer_.reset();
   held_frame_.reset();
@@ -175,13 +199,11 @@ content::WebContents* View::web_contents() const {
   return contents_ ? contents_->web_contents() : nullptr;
 }
 
-content::RenderWidgetHost* View::widget() const {
-  if (!contents_) {
+OffscreenView* View::page_view() const {
+  if (!contents_ || !contents_->web_contents()->GetRenderWidgetHostView()) {
     return nullptr;
   }
-  content::RenderWidgetHostView* view =
-      contents_->web_contents()->GetRenderWidgetHostView();
-  return view ? view->GetRenderWidgetHost() : nullptr;
+  return contents_view_->GetView();
 }
 
 // ---- frames -----------------------------------------------------------------
@@ -199,6 +221,12 @@ void View::StartCapture() {
   // capturer is bound to; a new capturer on the new view is the simple answer.
   held_frame_.reset();
   capturer_ = view->CreateVideoCapturer();
+  // Not the page's own frame sink, which CreateVideoCapturer() aims at, but
+  // the compositor's above it: that one has a <select>'s drop-down in it too,
+  // which is a widget of its own stacked over the page.
+  capturer_->ChangeTarget(viz::VideoCaptureTarget(static_cast<OffscreenView*>(
+                              view)->GetRootFrameSinkId()),
+                          /*sub_capture_target_version=*/0);
   capturer_->SetFormat(media::PIXEL_FORMAT_ARGB);
   capturer_->SetAnimationFpsLockIn(false, 0.0);
   // The texture is shown 1:1: never trade resolution for throughput.
@@ -287,7 +315,19 @@ void View::Resize(const gfx::Size& size_dips) {
     return;
   }
   size_dips_ = size_dips;
+  // The window the page believes it is in (window.outerWidth, screenX)...
   contents_->SetBounds(gfx::Rect(size_dips_));
+  // ...and the surface it paints.
+  contents_view_->SetSize(size_dips_);
+  ApplyCaptureSize();
+  Invalidate();
+}
+
+void View::SetScale(float scale) {
+  if (!contents_ || scale <= 0) {
+    return;
+  }
+  contents_view_->SetScale(scale);
   ApplyCaptureSize();
   Invalidate();
 }
@@ -305,12 +345,8 @@ void View::SetVisible(bool visible) {
 }
 
 void View::SetFocus(bool focused) {
-  if (content::RenderWidgetHost* host = widget()) {
-    if (focused) {
-      host->GetView()->Focus();
-    } else {
-      host->Blur();
-    }
+  if (OffscreenView* view = page_view()) {
+    view->SetFocused(focused);
   }
 }
 
@@ -368,8 +404,8 @@ void View::SetZoom(double level) {
 // ---- input ------------------------------------------------------------------
 
 void View::MouseMove(int x, int y, uint32_t modifiers, bool left_the_view) {
-  content::RenderWidgetHost* host = widget();
-  if (!host) {
+  OffscreenView* view = page_view();
+  if (!view) {
     return;
   }
   blink::WebMouseEvent event(
@@ -378,13 +414,13 @@ void View::MouseMove(int x, int y, uint32_t modifiers, bool left_the_view) {
       gfx::PointF(x, y), gfx::PointF(x, y),
       blink::WebPointerProperties::Button::kNoButton, 0,
       ToBlinkModifiers(modifiers), ui::EventTimeForNow());
-  host->ForwardMouseEvent(event);
+  view->SendMouseEvent(event);
 }
 
 void View::MouseButton(int x, int y, sofik_mouse_button button, bool is_up,
                        int click_count, uint32_t modifiers) {
-  content::RenderWidgetHost* host = widget();
-  if (!host) {
+  OffscreenView* view = page_view();
+  if (!view) {
     return;
   }
   blink::WebPointerProperties::Button blink_button =
@@ -403,18 +439,18 @@ void View::MouseButton(int x, int y, sofik_mouse_button button, bool is_up,
     // A click lands where the keyboard should go next.
     SetFocus(true);
   }
-  host->ForwardMouseEvent(event);
+  view->SendMouseEvent(event);
 }
 
 void View::MouseWheel(int x, int y, float delta_x, float delta_y,
                       uint32_t modifiers) {
-  content::RenderWidgetHost* host = widget();
-  if (!host) {
+  OffscreenView* view = page_view();
+  if (!view) {
     return;
   }
-  // As DevTools' Input.dispatchMouseEvent builds it: a self-contained scroll,
-  // begun and ended, in precise pixels. The engine has no gesture stream to
-  // take real phases from.
+  // Precise pixels, as a trackpad reports them. The scroll's phases -- it has
+  // to begin and end for the compositor to take it -- are the view's business:
+  // it has no gesture stream to read them from and times them instead.
   blink::WebMouseWheelEvent event(blink::WebInputEvent::Type::kMouseWheel,
                                   ToBlinkModifiers(modifiers),
                                   ui::EventTimeForNow());
@@ -422,24 +458,16 @@ void View::MouseWheel(int x, int y, float delta_x, float delta_y,
   event.SetPositionInScreen(gfx::PointF(x, y));
   event.delta_x = delta_x;
   event.delta_y = delta_y;
-  event.wheel_ticks_x = delta_x == 0 ? 0 : (delta_x > 0 ? 1.0f : -1.0f);
-  event.wheel_ticks_y = delta_y == 0 ? 0 : (delta_y > 0 ? 1.0f : -1.0f);
-  event.phase = blink::WebMouseWheelEvent::kPhaseBegan;
+  event.wheel_ticks_x = delta_x / 120.0f;
+  event.wheel_ticks_y = delta_y / 120.0f;
   event.delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
-  event.dispatch_type = blink::WebInputEvent::DispatchType::kBlocking;
-  host->ForwardWheelEvent(event);
-
-  event.delta_x = event.delta_y = 0;
-  event.wheel_ticks_x = event.wheel_ticks_y = 0;
-  event.phase = blink::WebMouseWheelEvent::kPhaseEnded;
-  event.dispatch_type = blink::WebInputEvent::DispatchType::kEventNonBlocking;
-  host->ForwardWheelEvent(event);
+  view->SendMouseWheelEvent(event);
 }
 
 void View::Key(sofik_key_type type, int windows_key_code, int native_key_code,
                uint32_t character, uint32_t modifiers) {
-  content::RenderWidgetHost* host = widget();
-  if (!host) {
+  OffscreenView* view = page_view();
+  if (!view) {
     return;
   }
   blink::WebInputEvent::Type blink_type =
@@ -472,7 +500,7 @@ void View::Key(sofik_key_type type, int windows_key_code, int native_key_code,
     event.text[0] = static_cast<char16_t>(character);
     event.unmodified_text[0] = static_cast<char16_t>(character);
   }
-  host->ForwardKeyboardEvent(event);
+  view->SendKeyEvent(event);
 }
 
 // ---- events -----------------------------------------------------------------
@@ -566,6 +594,7 @@ void View::OnDidAddMessageToConsole(
 void View::WebContentsDestroyed() {
   // The page closed itself (window.close, a crash handler, DevTools).
   contents_ = nullptr;
+  contents_view_ = nullptr;
   capturer_.reset();
   held_frame_.reset();
   cdp_host_ = nullptr;
@@ -580,6 +609,134 @@ void View::WebContentsDestroyed() {
                        }
                      },
                      id_));
+}
+
+// ---- what a native view would have shown -------------------------------------
+
+namespace {
+
+sofik_cursor ToSofikCursor(ui::mojom::CursorType type) {
+  using ui::mojom::CursorType;
+  switch (type) {
+    case CursorType::kHand:
+      return SOFIK_CURSOR_HAND;
+    case CursorType::kIBeam:
+      return SOFIK_CURSOR_IBEAM;
+    case CursorType::kCross:
+      return SOFIK_CURSOR_CROSS;
+    case CursorType::kWait:
+      return SOFIK_CURSOR_WAIT;
+    case CursorType::kProgress:
+      return SOFIK_CURSOR_PROGRESS;
+    case CursorType::kHelp:
+      return SOFIK_CURSOR_HELP;
+    case CursorType::kNotAllowed:
+    case CursorType::kNoDrop:
+      return SOFIK_CURSOR_NOT_ALLOWED;
+    case CursorType::kGrab:
+      return SOFIK_CURSOR_GRAB;
+    case CursorType::kGrabbing:
+      return SOFIK_CURSOR_GRABBING;
+    case CursorType::kMove:
+    case CursorType::kMiddlePanning:
+      return SOFIK_CURSOR_MOVE;
+    case CursorType::kCopy:
+      return SOFIK_CURSOR_COPY;
+    case CursorType::kAlias:
+      return SOFIK_CURSOR_ALIAS;
+    case CursorType::kContextMenu:
+      return SOFIK_CURSOR_CONTEXT_MENU;
+    case CursorType::kCell:
+      return SOFIK_CURSOR_CELL;
+    case CursorType::kVerticalText:
+      return SOFIK_CURSOR_VERTICAL_TEXT;
+    case CursorType::kZoomIn:
+      return SOFIK_CURSOR_ZOOM_IN;
+    case CursorType::kZoomOut:
+      return SOFIK_CURSOR_ZOOM_OUT;
+    case CursorType::kColumnResize:
+      return SOFIK_CURSOR_RESIZE_COLUMN;
+    case CursorType::kRowResize:
+      return SOFIK_CURSOR_RESIZE_ROW;
+    case CursorType::kEastResize:
+    case CursorType::kWestResize:
+    case CursorType::kEastWestResize:
+      return SOFIK_CURSOR_RESIZE_EW;
+    case CursorType::kNorthResize:
+    case CursorType::kSouthResize:
+    case CursorType::kNorthSouthResize:
+      return SOFIK_CURSOR_RESIZE_NS;
+    case CursorType::kNorthEastResize:
+    case CursorType::kSouthWestResize:
+    case CursorType::kNorthEastSouthWestResize:
+      return SOFIK_CURSOR_RESIZE_NESW;
+    case CursorType::kNorthWestResize:
+    case CursorType::kSouthEastResize:
+    case CursorType::kNorthWestSouthEastResize:
+      return SOFIK_CURSOR_RESIZE_NWSE;
+    case CursorType::kNone:
+      return SOFIK_CURSOR_NONE;
+    case CursorType::kCustom:
+      return SOFIK_CURSOR_CUSTOM;
+    default:
+      return SOFIK_CURSOR_POINTER;
+  }
+}
+
+}  // namespace
+
+void View::OnCursorChanged(const ui::Cursor& cursor) {
+  const sofik_cursor mapped = ToSofikCursor(cursor.type());
+  // The renderer repeats the cursor on every mouse move.
+  if (mapped == last_cursor_ && mapped != SOFIK_CURSOR_CUSTOM) {
+    return;
+  }
+  last_cursor_ = mapped;
+  if (callbacks_.on_cursor) {
+    callbacks_.on_cursor(user_, id_, mapped);
+  }
+}
+
+void View::OnTooltipChanged(const std::u16string& text) {
+  if (text == last_tooltip_) {
+    return;
+  }
+  last_tooltip_ = text;
+  if (callbacks_.on_tooltip) {
+    callbacks_.on_tooltip(user_, id_, base::UTF16ToUTF8(text).c_str());
+  }
+}
+
+void View::OnTextInputStateChanged(bool is_editable, const gfx::Rect& caret) {
+  if (callbacks_.on_focused_node_changed) {
+    callbacks_.on_focused_node_changed(user_, id_, is_editable, ToRect(caret));
+  }
+}
+
+void View::OnImeCompositionBoundsChanged(const gfx::Rect& bounds) {
+  if (callbacks_.on_ime_composition_bounds) {
+    callbacks_.on_ime_composition_bounds(user_, id_, ToRect(bounds));
+  }
+}
+
+void View::ImeSetComposition(const std::string& text, int selection_start,
+                             int selection_end) {
+  if (OffscreenView* view = page_view()) {
+    view->ImeSetComposition(base::UTF8ToUTF16(text), selection_start,
+                            selection_end);
+  }
+}
+
+void View::ImeCommit(const std::string& text) {
+  if (OffscreenView* view = page_view()) {
+    view->ImeCommitText(base::UTF8ToUTF16(text));
+  }
+}
+
+void View::ImeCancel() {
+  if (OffscreenView* view = page_view()) {
+    view->ImeCancel();
+  }
 }
 
 // ---- new windows and dialogs ------------------------------------------------
@@ -831,6 +988,12 @@ void sofik_view_resize(sofik_view_id id, int width, int height) {
   }
 }
 
+void sofik_view_set_scale(sofik_view_id id, float device_scale_factor) {
+  if (sofik::View* view = Find(id)) {
+    view->SetScale(device_scale_factor);
+  }
+}
+
 void sofik_view_set_visible(sofik_view_id id, int visible) {
   if (sofik::View* view = Find(id)) {
     view->SetVisible(visible != 0);
@@ -912,6 +1075,25 @@ void sofik_view_key(sofik_view_id id, sofik_key_type type, int windows_key_code,
                     uint32_t modifiers) {
   if (sofik::View* view = Find(id)) {
     view->Key(type, windows_key_code, native_key_code, character, modifiers);
+  }
+}
+
+void sofik_view_ime_set_composition(sofik_view_id id, const char* text,
+                                    int selection_start, int selection_end) {
+  if (sofik::View* view = Find(id)) {
+    view->ImeSetComposition(text ? text : "", selection_start, selection_end);
+  }
+}
+
+void sofik_view_ime_commit(sofik_view_id id, const char* text) {
+  if (sofik::View* view = Find(id)) {
+    view->ImeCommit(text ? text : "");
+  }
+}
+
+void sofik_view_ime_cancel(sofik_view_id id) {
+  if (sofik::View* view = Find(id)) {
+    view->ImeCancel();
   }
 }
 

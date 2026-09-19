@@ -614,4 +614,8 @@ Screen* CreateNativeScreen() {
   return new ScreenMac;
 }
 
+Screen* CreatePhysicalScreen() {
+  return new ScreenMac;
+}
+
 }  // namespace display

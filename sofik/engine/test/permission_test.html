@@ -1,0 +1,12 @@
+<!doctype html><meta charset=utf-8><title>permission test</title>
+<button id=go style="position:absolute;left:20px;top:20px;width:200px;height:40px">go</button>
+<script>
+const log={};
+go.onclick=async()=>{
+  log.notification=await Notification.requestPermission();
+  log.geolocation=await new Promise(r=>navigator.geolocation.getCurrentPosition(
+      ()=>r('granted'),e=>r('error '+e.code+(e.code===1?' PERMISSION_DENIED':''))));
+  log.done=true;
+};
+window.report=()=>JSON.stringify(log);
+</script>

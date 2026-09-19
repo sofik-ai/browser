@@ -20,14 +20,15 @@
  * Linux the engine runs a UI thread of its own: calls may come from any
  * thread and are posted to it, callbacks arrive on the engine's thread.
  *
- * Status. macOS only so far. Wired: process and lifecycle, views, GPU and
- * software frames, navigation, mouse, wheel and keyboard, the address, title,
- * favicon, loading, load-error, console and closed events, new-window
- * requests, JavaScript dialogs (alert, confirm, prompt, beforeunload),
- * downloads, permission prompts, and the DevTools session. Declared but not
- * delivered yet: cursor, tooltip, focused-node and IME events and file
- * dialogs, and the functions that answer them -- calling one of those fails at link time
- * rather than silently doing nothing.
+ * Status. macOS only so far. Wired: process and lifecycle, views with a size
+ * and a scale of their own, GPU and software frames (a <select> drop-down is
+ * already composited into them), navigation, mouse, wheel, keyboard and IME,
+ * the address, title, favicon, loading, load-error, console, cursor, tooltip,
+ * focused-node, IME-bounds and closed events, new-window requests, JavaScript
+ * dialogs (alert, confirm, prompt, beforeunload), downloads, permission
+ * prompts, and the DevTools session. Declared but not delivered yet: file
+ * dialogs and on_before_navigation -- sofik_view_answer_file_dialog fails at
+ * link time rather than silently doing nothing.
  */
 
 #ifndef SOFIK_ENGINE_SOFIK_ENGINE_H_
@@ -52,7 +53,7 @@ extern "C" {
 
 /* Bumped on any incompatible change. sofik_engine_initialize refuses a
  * settings struct built against a different one. */
-#define SOFIK_ENGINE_ABI 1
+#define SOFIK_ENGINE_ABI 2
 
 typedef uint32_t sofik_view_id; /* 0 is never a valid view. */
 
@@ -75,8 +76,7 @@ typedef struct sofik_settings {
   const char* user_agent;
   const char* extra_switches;   /* space separated, for diagnostics */
   int remote_debugging_port;    /* 0 = off */
-  /* One scale for every view: the content layer takes it from the screen, and
-   * the engine has a single (virtual) screen. 0 means 1.0. */
+  /* The scale of a view that does not name one. 0 means 1.0. */
   float device_scale_factor;
 } sofik_settings;
 
@@ -122,7 +122,14 @@ typedef enum sofik_cursor {
   SOFIK_CURSOR_CROSS, SOFIK_CURSOR_WAIT, SOFIK_CURSOR_NOT_ALLOWED,
   SOFIK_CURSOR_GRAB, SOFIK_CURSOR_GRABBING, SOFIK_CURSOR_RESIZE_EW,
   SOFIK_CURSOR_RESIZE_NS, SOFIK_CURSOR_RESIZE_NESW, SOFIK_CURSOR_RESIZE_NWSE,
-  SOFIK_CURSOR_NONE,
+  SOFIK_CURSOR_NONE, SOFIK_CURSOR_MOVE, SOFIK_CURSOR_HELP,
+  SOFIK_CURSOR_PROGRESS, SOFIK_CURSOR_COPY, SOFIK_CURSOR_ALIAS,
+  SOFIK_CURSOR_CONTEXT_MENU, SOFIK_CURSOR_CELL, SOFIK_CURSOR_VERTICAL_TEXT,
+  SOFIK_CURSOR_ZOOM_IN, SOFIK_CURSOR_ZOOM_OUT, SOFIK_CURSOR_RESIZE_COLUMN,
+  SOFIK_CURSOR_RESIZE_ROW,
+  /* An image of the page's own (cursor: url(...)). Shown as a pointer until
+   * the API carries the bitmap. */
+  SOFIK_CURSOR_CUSTOM,
 } sofik_cursor;
 
 typedef enum sofik_dialog_kind {
@@ -166,10 +173,15 @@ typedef struct sofik_view_callbacks {
                         const char* error_text, const char* url);
   void (*on_console_message)(void* user, sofik_view_id, int level,
                              const char* message, const char* source, int line);
+  /* "" when there is no tooltip any more. */
   void (*on_tooltip)(void* user, sofik_view_id, const char* text);
+  /* Focus entered or left a text field, or the caret moved inside one.
+   * `caret` is in DIPs relative to the view: where an input method's
+   * candidate window belongs before there is a composition. */
   void (*on_focused_node_changed)(void* user, sofik_view_id, int is_editable,
-                                  sofik_rect bounds);
-  void (*on_ime_composition_bounds)(void* user, sofik_view_id, sofik_rect caret);
+                                  sofik_rect caret);
+  /* The text being composed, in DIPs relative to the view. */
+  void (*on_ime_composition_bounds)(void* user, sofik_view_id, sofik_rect bounds);
 
   /* Return non-zero to cancel. A popup is never opened by the engine itself:
    * the host decides, usually by loading `url` in a view of its own. */
@@ -204,6 +216,9 @@ typedef struct sofik_view_config {
    * profile under cache_root; NULL is an off-the-record profile. */
   const char* profile;
   int prefer_gpu_frames;      /* shared texture instead of pixels */
+  /* Pixels per DIP of this view: the density of whatever the host composites
+   * the texture onto. 0 takes sofik_settings.device_scale_factor. */
+  float device_scale_factor;
 } sofik_view_config;
 
 SOFIK_EXPORT sofik_view_id sofik_view_create(const sofik_view_config*,
@@ -212,6 +227,8 @@ SOFIK_EXPORT sofik_view_id sofik_view_create(const sofik_view_config*,
 SOFIK_EXPORT void sofik_view_close(sofik_view_id);
 
 SOFIK_EXPORT void sofik_view_resize(sofik_view_id, int width, int height);
+/* The window moved to a monitor of another density. */
+SOFIK_EXPORT void sofik_view_set_scale(sofik_view_id, float device_scale_factor);
 SOFIK_EXPORT void sofik_view_set_visible(sofik_view_id, int visible);
 SOFIK_EXPORT void sofik_view_set_focus(sofik_view_id, int focused);
 SOFIK_EXPORT void sofik_view_invalidate(sofik_view_id);
@@ -253,6 +270,8 @@ SOFIK_EXPORT void sofik_view_key(sofik_view_id, sofik_key_type,
                                  int windows_key_code, int native_key_code,
                                  uint32_t character, uint32_t modifiers);
 
+/* Text input through an input method. The selection is in UTF-16 code units
+ * inside `text`, as the platform's input APIs report it. */
 SOFIK_EXPORT void sofik_view_ime_set_composition(sofik_view_id,
                                                  const char* text,
                                                  int selection_start,

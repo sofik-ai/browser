@@ -12,6 +12,7 @@
 #include "content/public/browser/web_contents.h"
 #include "headless/lib/browser/headless_screen_mac.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
+#include "headless/public/headless_browser.h"
 #include "services/device/public/cpp/geolocation/system_geolocation_source_apple.h"
 #import "ui/base/cocoa/base_view.h"
 #include "ui/display/screen.h"
@@ -43,9 +44,18 @@ void HeadlessPlatformDelegate::Initialize(
     const HeadlessBrowser::Options& options) {
   SetGeolocationSystemPermissionManagerInstance();
 
-  HeadlessScreen* screen =
-      HeadlessScreenMac::Create(options.window_size, options.screen_info_spec);
-  display::Screen::SetScreenInstance(screen);
+  if (HeadlessBrowser::UsesBrowserIdentity()) {
+    // Sofik: an embedded browser lives in somebody else's application, on a
+    // real monitor. The headless screen is neither harmless nor honest there:
+    // it replaces -[NSScreen frame] for the whole process, so the host's own
+    // windows are laid out on an imaginary 800x600 display, and every page
+    // reads that same display back from window.screen.
+    display::Screen::SetScreenInstance(display::CreatePhysicalScreen());
+  } else {
+    HeadlessScreen* screen = HeadlessScreenMac::Create(
+        options.window_size, options.screen_info_spec);
+    display::Screen::SetScreenInstance(screen);
+  }
 
   content::DontShowPopupMenus();
 }

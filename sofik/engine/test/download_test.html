@@ -1,0 +1,9 @@
+<!doctype html><meta charset=utf-8><title>download test</title>
+<a id=a>baixar</a>
+<script>
+const blob=new Blob(["coluna,valor\nação,42\n"],{type:"text/csv"});
+a.href=URL.createObjectURL(blob);
+// A hostile name, as a page may well send.
+a.download="../../../etc/relatório final.csv";
+setTimeout(()=>a.click(),800);
+</script>

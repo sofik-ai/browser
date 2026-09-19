@@ -1,0 +1,14 @@
+<!doctype html><meta charset=utf-8><title>dialog test</title>
+<button id=go style="position:absolute;left:20px;top:20px;width:200px;height:40px">go</button>
+<script>
+const log={};
+go.onclick=()=>{
+  log.confirm=confirm('Prosseguir?');
+  log.prompt=prompt('Seu nome?','padrão');
+  const w=window.open('https://example.com/popup-da-pagina','_blank');
+  log.windowOpenReturned=(w===null)?'null':'a window';
+  alert('fim');
+  log.alertReturned=true;
+};
+window.report=()=>JSON.stringify(log);
+</script>

@@ -129,6 +129,17 @@ class HeadlessContentBrowserClient : public content::ContentBrowserClient {
   void OnNetworkServiceCreated(
       ::network::mojom::NetworkService* network_service) override;
 
+  // Sofik: the DevTools front end, see headless/public/sofik_devtools.h.
+  mojo::PendingRemote<network::mojom::URLLoaderFactory>
+  CreateNonNetworkNavigationURLLoaderFactory(
+      const std::string& scheme,
+      content::FrameTreeNodeId frame_tree_node_id) override;
+  void RegisterNonNetworkSubresourceURLLoaderFactories(
+      int render_process_id,
+      int render_frame_id,
+      const std::optional<url::Origin>& request_initiator_origin,
+      NonNetworkURLLoaderFactoryMap* factories) override;
+
   void GetHyphenationDictionary(
       base::OnceCallback<void(const base::FilePath&)> callback) override;
 

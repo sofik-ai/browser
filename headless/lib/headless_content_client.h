@@ -35,6 +35,7 @@ class HeadlessContentClient : public content::ContentClient {
   std::string GetDataResourceString(int resource_id) override;
   gfx::Image& GetNativeImageNamed(int resource_id) override;
   blink::OriginTrialPolicy* GetOriginTrialPolicy() override;
+  void AddAdditionalSchemes(Schemes* schemes) override;
 
  private:
   // Used to lock when |origin_trial_policy_| is initialized.

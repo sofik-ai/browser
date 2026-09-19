@@ -5,6 +5,7 @@
 #include "headless/lib/headless_content_client.h"
 
 #include "components/embedder_support/origin_trials/origin_trial_policy_impl.h"
+#include "headless/public/sofik_devtools.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -39,6 +40,15 @@ std::string HeadlessContentClient::GetDataResourceString(int resource_id) {
 gfx::Image& HeadlessContentClient::GetNativeImageNamed(int resource_id) {
   return ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
       resource_id);
+}
+
+void HeadlessContentClient::AddAdditionalSchemes(Schemes* schemes) {
+  // Sofik: the DevTools front end's own scheme. Standard, so that it has an
+  // origin and with it storage for its settings; secure, because the front
+  // end uses APIs that ask for a secure context.
+  schemes->standard_schemes.push_back(kSofikDevToolsScheme);
+  schemes->secure_schemes.push_back(kSofikDevToolsScheme);
+  schemes->cors_enabled_schemes.push_back(kSofikDevToolsScheme);
 }
 
 blink::OriginTrialPolicy* HeadlessContentClient::GetOriginTrialPolicy() {

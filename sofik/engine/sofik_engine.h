@@ -240,6 +240,16 @@ SOFIK_EXPORT sofik_view_id sofik_view_create(const sofik_view_config*,
                                              void* user);
 SOFIK_EXPORT void sofik_view_close(sofik_view_id);
 
+/* Developer Tools for `inspected`, as a view of its own and of either kind,
+ * for the host to show wherever it likes -- docked under the page, in a window
+ * of its own. `url` in the config is ignored. It closes itself (on_closed)
+ * when the inspected view goes away, and sofik_view_close on it ends the
+ * inspection. The front end is served from the engine's own resources: no
+ * port is opened. 0 on failure. */
+SOFIK_EXPORT sofik_view_id sofik_view_open_devtools(
+    sofik_view_id inspected, const sofik_view_config*,
+    const sofik_view_callbacks*, void* user);
+
 /* For a view created with native_view: the NSView* (macOS) to add to the
  * host's window and to size like any other. The engine owns it; it is gone
  * after sofik_view_close or on_closed, and so has to be removed from its

@@ -54,6 +54,8 @@ executable("sofik_engine_probe") {
 # hidden visibility.
 shared_library("sofik_engine") {
   sources = [
+    "devtools_frontend.cc",
+    "devtools_frontend.h",
     "downloads.cc",
     "downloads.h",
     "engine.cc",
@@ -105,11 +107,14 @@ shared_library("sofik_engine") {
     "//content/public/browser",
     "//content/public/common",
     "//headless:headless_shell_lib",
+    "//ipc:mojom_constants",
     "//media",
     "//media/capture:capture_base",
     "//media/capture/mojom:video_capture",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
     "//third_party/blink/public/common",
     "//ui/base",
     "//ui/base/cursor",
@@ -149,6 +154,7 @@ if (is_mac) {
   executable("sofik_engine_host") {
     sources = [ "host_mac.mm" ]
     deps = [ ":sofik_engine" ]
+
     # Beside the engine, as in the build directory, or as an application
     # bundle with the engine in Contents/Frameworks/sofik_engine -- which is
     # where it has to be: the sandbox lets a child process read the main

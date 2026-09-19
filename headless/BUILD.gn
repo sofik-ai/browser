@@ -245,20 +245,20 @@ source_set("headless_renderer") {
   sources = [
     "lib/renderer/allowlist.cc",
     "lib/renderer/allowlist.h",
-    "lib/renderer/sofik_chrome_object.cc",
-    "lib/renderer/sofik_chrome_object.h",
     "lib/renderer/headless_content_renderer_client.cc",
     "lib/renderer/headless_content_renderer_client.h",
+    "lib/renderer/sofik_chrome_object.cc",
+    "lib/renderer/sofik_chrome_object.h",
   ]
 
   deps = [
     "//content/public/common",
     "//gin",
+    "//net",
     "//printing/buildflags",
     "//third_party/blink/public:blink",
     "//ui/gl",
     "//v8",
-    "//net",
   ]
   public_deps = [
     ":headless_common",
@@ -334,9 +334,9 @@ source_set("headless_browser") {
     "lib/browser/headless_devtools.h",
     "lib/browser/headless_devtools_manager_delegate.cc",
     "lib/browser/headless_devtools_manager_delegate.h",
-    "lib/browser/headless_permission_manager.cc",
     "lib/browser/headless_notification_service.cc",
     "lib/browser/headless_notification_service.h",
+    "lib/browser/headless_permission_manager.cc",
     "lib/browser/headless_permission_manager.h",
     "lib/browser/headless_platform_delegate.h",
     "lib/browser/headless_platform_event_source.cc",
@@ -367,11 +367,14 @@ source_set("headless_browser") {
     "lib/browser/protocol/page_handler.h",
     "lib/browser/protocol/target_handler.cc",
     "lib/browser/protocol/target_handler.h",
+    "lib/browser/sofik_devtools_url_loader_factory.cc",
+    "lib/browser/sofik_devtools_url_loader_factory.h",
     "public/headless_browser.h",
     "public/headless_browser_context.h",
     "public/headless_embedder_delegate.h",
     "public/headless_web_contents.h",
     "public/headless_window_state.h",
+    "public/sofik_devtools.h",
   ]
 
   public_deps = [

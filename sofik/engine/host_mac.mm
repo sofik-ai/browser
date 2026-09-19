@@ -9,6 +9,7 @@
 //   sofik_engine_host --input-test <url of a page with a report() function>
 //   sofik_engine_host --view-test [--shot=PNG] <url of test/view_test.html>
 //   sofik_engine_host --native-view ...   the page in an NSView, not a texture
+//   sofik_engine_host --devtools [--shot=PNG] <url>   Developer Tools beside it
 //   sofik_engine_host --dialog-test --upload=FILE <url of test/upload_test.html>
 
 #import <Cocoa/Cocoa.h>
@@ -179,6 +180,8 @@ int WindowsKeyCode(NSEvent* event) {
 @property BOOL dialogTest;
 @property BOOL viewTest;
 @property BOOL nativeView;
+@property BOOL devtools;
+@property(strong) NSWindow* devtoolsWindow;
 @property(copy) NSString* switches;
 @property(copy) NSString* uploadPath;
 @property(copy) NSString* downloadDir;
@@ -314,6 +317,14 @@ static void OnImeBounds(void*, sofik_view_id, sofik_rect bounds) {
   NSLog(@"sofik host: ime bounds=%d,%d %dx%d", bounds.x, bounds.y, bounds.width,
         bounds.height);
 }
+static void OnToolsConsole(void*, sofik_view_id, int level, const char* message,
+                           const char* source, int line) {
+  // The front end's own console: how a broken front end says what is wrong.
+  if (level >= 2) {
+    NSLog(@"sofik host: devtools console [%d] %s (%s:%d)", level, message,
+          source, line);
+  }
+}
 static void OnCdp(void*, sofik_view_id, const char* message) {
   NSString* text = @(message);
   if (g_host.evalExpression) {
@@ -420,6 +431,51 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     native.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.page addSubview:native];
     [self.window makeFirstResponder:native];
+  }
+
+  if (self.devtools) {
+    // Developer Tools in a window of their own, as a native view.
+    sofik_view_config tools = {};
+    tools.width = 1100;
+    tools.height = 700;
+    tools.native_view = 1;
+    sofik_view_callbacks tools_callbacks = {};
+    tools_callbacks.on_console_message = OnToolsConsole;
+    sofik_view_id tools_view =
+        sofik_view_open_devtools(g_view, &tools, &tools_callbacks, nullptr);
+    NSView* native = (__bridge NSView*)sofik_view_native_handle(tools_view);
+    if (!native) {
+      NSLog(@"sofik host: Developer Tools did not open");
+      [NSApp terminate:nil];
+      return;
+    }
+    const NSRect tools_frame = NSMakeRect(0, 0, tools.width, tools.height);
+    self.devtoolsWindow = [[NSWindow alloc]
+        initWithContentRect:tools_frame
+                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    self.devtoolsWindow.title = @"Developer Tools — Sofik engine";
+    self.devtoolsWindow.releasedWhenClosed = NO;
+    native.frame = tools_frame;
+    native.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [self.devtoolsWindow.contentView addSubview:native];
+    [self.devtoolsWindow makeKeyAndOrderFront:nil];
+    if (self.shotPath) {
+      dispatch_after(
+          dispatch_time(DISPATCH_TIME_NOW, self.shotAfterMs * NSEC_PER_MSEC),
+          dispatch_get_main_queue(), ^{
+            // The snapshot is of the tools' window, not the page's.
+            NSWindow* page_window = self.window;
+            self.window = self.devtoolsWindow;
+            [self snapshot];
+            self.window = page_window;
+            [native removeFromSuperview];
+            sofik_view_close(tools_view);
+            [NSApp terminate:nil];
+          });
+    }
+    return;
   }
 
   if (self.evalExpression) {
@@ -646,6 +702,8 @@ int main(int argc, const char** argv) {
         g_host.uploadPath = [arg substringFromIndex:9];
       } else if ([arg hasPrefix:@"--switches="]) {
         g_host.switches = [arg substringFromIndex:11];
+      } else if ([arg isEqualToString:@"--devtools"]) {
+        g_host.devtools = YES;
       } else if ([arg isEqualToString:@"--native-view"]) {
         g_host.nativeView = YES;
       } else if ([arg isEqualToString:@"--view-test"]) {

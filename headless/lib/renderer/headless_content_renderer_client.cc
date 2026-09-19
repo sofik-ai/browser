@@ -4,12 +4,6 @@
 
 #include "headless/lib/renderer/headless_content_renderer_client.h"
 
-#include "base/command_line.h"
-#include "headless/lib/renderer/sofik_chrome_object.h"
-#include "headless/public/switches.h"
-#include "third_party/blink/public/web/web_script_controller.h"
-#include "v8/include/v8-extension.h"
-
 #include <memory>
 
 #include "base/check_deref.h"
@@ -18,11 +12,17 @@
 #include "content/public/common/web_identity.h"
 #include "content/public/renderer/render_thread.h"
 #include "headless/lib/common/headless_features.h"
+#include "headless/lib/renderer/sofik_chrome_object.h"
+#include "headless/public/sofik_devtools.h"
 #include "headless/public/switches.h"
 #include "media/base/video_codecs.h"
 #include "printing/buildflags/buildflags.h"
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
+#include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/modules/credentialmanagement/throttle_helper.h"
+#include "third_party/blink/public/web/web_script_controller.h"
+#include "third_party/blink/public/web/web_security_policy.h"
+#include "v8/include/v8-extension.h"
 
 #if BUILDFLAG(ENABLE_PRINTING)
 #include "components/printing/renderer/print_render_frame_helper.h"
@@ -110,6 +110,11 @@ HeadlessContentRendererClient::HeadlessContentRendererClient() {
 HeadlessContentRendererClient::~HeadlessContentRendererClient() = default;
 
 void HeadlessContentRendererClient::RenderThreadStarted() {
+  // Sofik: the DevTools front end fetch()es its own files -- locale data,
+  // for a start -- and Blink refuses fetch on a scheme nobody vouched for.
+  blink::WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
+      blink::WebString::FromUtf8(kSofikDevToolsScheme));
+
   // Sofik: a page in Chrome finds window.chrome; see sofik_chrome_object.h.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kSofikBrowserIdentity)) {

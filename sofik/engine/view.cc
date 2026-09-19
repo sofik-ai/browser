@@ -41,6 +41,7 @@
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "net/base/net_errors.h"
+#include "sofik/engine/devtools_frontend.h"
 #include "sofik/engine/downloads.h"
 #include "sofik/engine/engine.h"
 #include "sofik/engine/offscreen_contents_view.h"
@@ -189,6 +190,7 @@ View::~View() {
         pending.types.size(), blink::mojom::PermissionStatus::ASK));
   }
   permissions_.clear();
+  devtools_frontend_.reset();
   for (auto& [request, pending] : file_requests_) {
     pending.listener->FileSelectionCanceled();
   }
@@ -621,6 +623,12 @@ void View::OnDidAddMessageToConsole(
   }
 }
 
+void View::ShowDevToolsOf(View* inspected) {
+  devtools_frontend_ = std::make_unique<DevToolsFrontend>(
+      web_contents(), inspected->web_contents(),
+      base::BindOnce(&View::CloseSoon, base::Unretained(this)));
+}
+
 void View::WebContentsDestroyed() {
   // The page closed itself (window.close, a crash handler, DevTools).
   contents_ = nullptr;
@@ -628,6 +636,10 @@ void View::WebContentsDestroyed() {
   capturer_.reset();
   held_frame_.reset();
   cdp_host_ = nullptr;
+  CloseSoon();
+}
+
+void View::CloseSoon() {
   if (callbacks_.on_closed) {
     callbacks_.on_closed(user_, id_);
   }
@@ -1107,6 +1119,28 @@ sofik_view_id sofik_view_create(const sofik_view_config* config,
   sofik::View* view =
       engine->CreateView(*config, callbacks ? *callbacks : none, user);
   return view ? view->id() : 0;
+}
+
+sofik_view_id sofik_view_open_devtools(sofik_view_id inspected,
+                                       const sofik_view_config* config,
+                                       const sofik_view_callbacks* callbacks,
+                                       void* user) {
+  sofik::Engine* engine = sofik::Engine::Get();
+  sofik::View* page = Find(inspected);
+  if (!engine || !page || !page->web_contents() || !config) {
+    return 0;
+  }
+  const std::string url = sofik::DevToolsFrontend::URL();
+  sofik_view_config frontend_config = *config;
+  frontend_config.url = url.c_str();
+  sofik_view_callbacks none = {};
+  sofik::View* view = engine->CreateView(
+      frontend_config, callbacks ? *callbacks : none, user);
+  if (!view) {
+    return 0;
+  }
+  view->ShowDevToolsOf(page);
+  return view->id();
 }
 
 void* sofik_view_native_handle(sofik_view_id id) {

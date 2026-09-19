@@ -39,7 +39,9 @@
 #include "headless/lib/browser/headless_browser_context_impl.h"
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
+#include "headless/lib/browser/sofik_devtools_url_loader_factory.h"
 #include "headless/public/headless_embedder_delegate.h"
+#include "headless/public/sofik_devtools.h"
 #include "headless/lib/browser/headless_browser_main_parts.h"
 #include "headless/lib/browser/headless_devtools_manager_delegate.h"
 #include "headless/public/switches.h"
@@ -560,6 +562,31 @@ void HeadlessContentBrowserClient::CreateThrottlesForNavigation(
         SafeSearchFactory::GetForBrowserContext(context)));
   }
 #endif  // defined(HEADLESS_USE_POLICY)
+}
+
+mojo::PendingRemote<network::mojom::URLLoaderFactory>
+HeadlessContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+    const std::string& scheme,
+    content::FrameTreeNodeId frame_tree_node_id) {
+  if (scheme == kSofikDevToolsScheme) {
+    return SofikDevToolsURLLoaderFactory::Create();
+  }
+  return {};
+}
+
+void HeadlessContentBrowserClient::
+    RegisterNonNetworkSubresourceURLLoaderFactories(
+        int render_process_id,
+        int render_frame_id,
+        const std::optional<url::Origin>& request_initiator_origin,
+        NonNetworkURLLoaderFactoryMap* factories) {
+  // Only the front end itself loads front-end files: a web page must not be
+  // able to tell from a subresource that this browser has DevTools in it.
+  if (request_initiator_origin &&
+      request_initiator_origin->scheme() == kSofikDevToolsScheme) {
+    factories->emplace(kSofikDevToolsScheme,
+                       SofikDevToolsURLLoaderFactory::Create());
+  }
 }
 
 void HeadlessContentBrowserClient::OnNetworkServiceCreated(

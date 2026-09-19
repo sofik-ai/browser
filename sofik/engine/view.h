@@ -34,6 +34,8 @@ class HeadlessWebContentsImpl;
 
 namespace sofik {
 
+class DevToolsFrontend;
+
 // One page: a web contents, the frames it paints, the input it takes and the
 // events it reports. Everything runs on the engine's UI thread.
 class View : public content::WebContentsObserver,
@@ -59,6 +61,9 @@ class View : public content::WebContentsObserver,
   content::WebContents* web_contents() const;
   // Null unless the view was created with `native_view`.
   void* NativeHandle() const;
+  // Turns this view, created on DevToolsFrontend::URL(), into the DevTools of
+  // `inspected`. It closes itself when that page goes away.
+  void ShowDevToolsOf(View* inspected);
 
   void Resize(const gfx::Size& size_dips);
   void SetScale(float scale);
@@ -108,6 +113,8 @@ class View : public content::WebContentsObserver,
   void StartCapture();
   void ApplyCaptureSize();
   void ReportLoadingState();
+  // Tells the host, then asks the engine to delete this view.
+  void CloseSoon();
 
   // content::WebContentsObserver:
   void RenderViewReady() override;
@@ -233,6 +240,8 @@ class View : public content::WebContentsObserver,
   };
   std::map<uint32_t, FileRequest> file_requests_;
   uint32_t next_request_ = 1;
+
+  std::unique_ptr<DevToolsFrontend> devtools_frontend_;
 
   scoped_refptr<content::DevToolsAgentHost> cdp_host_;
   sofik_cdp_callback cdp_callback_ = nullptr;

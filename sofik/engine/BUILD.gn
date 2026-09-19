@@ -1,0 +1,50 @@
+# The Sofik engine: Sofik's own embedder of the content layer.
+#
+# It replaces CEF and, with it, the whole //chrome product layer CEF's Chrome
+# runtime drags in. It stands on //headless, which already is a complete,
+# small embedder (browser main parts, contexts, web contents, DevTools), and
+# adds what a Browser Card needs on top: frames for a Flutter texture, input,
+# and the identity of a real Chrome.
+
+import("//headless/headless.gni")
+
+# Milestone 1. Proves the critical path without CEF or //chrome: load a page,
+# take frames from the compositor through the same FrameSinkVideoCapturer the
+# Flutter texture will be fed by, write one out as a PNG.
+executable("sofik_engine_probe") {
+  testonly = false
+
+  sources = [
+    "probe.cc",
+    "probe_main.cc",
+  ]
+
+  deps = [
+    "//base",
+    "//components/os_crypt/common:switches",
+    "//components/viz/host",
+    "//content/public/app",
+    "//content/public/browser",
+    "//content/public/common",
+    "//headless:headless_shell_lib",
+    "//media/capture:capture_base",
+    "//media/capture/mojom:video_capture",
+    "//mojo/public/cpp/bindings",
+    "//skia",
+    "//ui/gfx",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
+    "//url",
+  ]
+
+  if (is_mac) {
+    deps += [ "//sandbox/mac:seatbelt" ]
+  }
+  if (is_win) {
+    deps += [
+      "//build/win:default_exe_manifest",
+      "//content:sandbox_helper_win",
+      "//sandbox/win:common",
+    ]
+  }
+}

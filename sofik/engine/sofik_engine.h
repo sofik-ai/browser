@@ -200,11 +200,17 @@ typedef struct sofik_view_callbacks {
   void (*on_file_dialog)(void* user, sofik_view_id, uint32_t request,
                          int allow_multiple, int is_folder,
                          const char* accept_types);
+  /* getUserMedia arrives here too, as CAMERA and/or MICROPHONE; the engine
+   * then opens the default devices, or the ones the page named. */
   void (*on_permission_request)(void* user, sofik_view_id, uint32_t request,
                                 const char* origin, uint32_t permissions);
   void (*on_download_requested)(void* user, sofik_view_id, uint32_t request,
                                 const sofik_download*);
   void (*on_download_updated)(void* user, sofik_view_id, const sofik_download*);
+
+  /* The page started or stopped using the camera or the microphone: what an
+   * "in use" indicator shows. */
+  void (*on_media_access)(void* user, sofik_view_id, int video, int audio);
 
   void (*on_closed)(void* user, sofik_view_id);
 } sofik_view_callbacks;

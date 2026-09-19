@@ -7,6 +7,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "content/public/browser/media_stream_request.h"
 #include "headless/public/headless_export.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom-forward.h"
@@ -55,6 +56,17 @@ class HEADLESS_EXPORT HeadlessEmbedderDelegate {
       const GURL& origin,
       const std::vector<blink::PermissionType>& types,
       PermissionCallback callback) = 0;
+
+  // getUserMedia. Headless on its own has no answer, so the content layer
+  // fails every request. Return true to take it; `callback` must then be run,
+  // now or later.
+  virtual bool OnMediaAccessRequested(
+      const content::MediaStreamRequest& request,
+      content::MediaResponseCallback callback) = 0;
+  // Whether `origin` already holds camera or microphone access: what decides
+  // if enumerateDevices() names the devices.
+  virtual bool HasMediaAccess(const url::Origin& origin,
+                              blink::mojom::MediaStreamType type) = 0;
 
   // <input type=file>. Headless on its own cancels it. Return true to take
   // the request; `listener` must then be answered, FileSelected() or

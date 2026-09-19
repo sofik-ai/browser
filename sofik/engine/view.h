@@ -4,12 +4,14 @@
 #define SOFIK_ENGINE_VIEW_H_
 
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/process/kill.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
 #include "content/public/browser/devtools_agent_host_client.h"
@@ -20,6 +22,7 @@
 #include "sofik/engine/offscreen_view.h"
 #include "sofik/engine/sofik_engine.h"
 #include "ui/gfx/geometry/size.h"
+#include "url/origin.h"
 
 namespace content {
 class DevToolsAgentHost;
@@ -164,6 +167,10 @@ class View : public content::WebContentsObserver,
                               PermissionCallback callback) override;
   bool OnFileChooser(scoped_refptr<content::FileSelectListener> listener,
                      const blink::mojom::FileChooserParams& params) override;
+  bool OnMediaAccessRequested(const content::MediaStreamRequest& request,
+                              content::MediaResponseCallback callback) override;
+  bool HasMediaAccess(const url::Origin& origin,
+                      blink::mojom::MediaStreamType type) override;
 
   // content::JavaScriptDialogManager:
   void RunJavaScriptDialog(content::WebContents* web_contents,
@@ -227,6 +234,25 @@ class View : public content::WebContentsObserver,
     PermissionCallback callback;
   };
   std::map<uint32_t, PermissionRequest> permissions_;
+  // getUserMedia requests awaiting the host; answered like a permission.
+  struct MediaRequest {
+    MediaRequest(const content::MediaStreamRequest& request,
+                 content::MediaResponseCallback callback);
+    MediaRequest(MediaRequest&&);
+    ~MediaRequest();
+    content::MediaStreamRequest request;
+    content::MediaResponseCallback callback;
+  };
+  std::map<uint32_t, MediaRequest> media_requests_;
+  void AnswerMediaRequest(MediaRequest pending, uint32_t granted);
+  // Streams open right now, for on_media_access. Counted, because a page may
+  // hold several at once.
+  void MediaStreamChanged(int video_delta, int audio_delta);
+  int video_streams_ = 0;
+  int audio_streams_ = 0;
+  // Origins the host let at the camera / the microphone, until the view goes.
+  std::set<url::Origin> camera_origins_;
+  std::set<url::Origin> microphone_origins_;
   // File choosers awaiting the host.
   struct FileRequest {
     FileRequest();
@@ -246,6 +272,8 @@ class View : public content::WebContentsObserver,
   scoped_refptr<content::DevToolsAgentHost> cdp_host_;
   sofik_cdp_callback cdp_callback_ = nullptr;
   raw_ptr<void> cdp_user_ = nullptr;
+
+  base::WeakPtrFactory<View> weak_ptr_factory_{this};
 };
 
 }  // namespace sofik

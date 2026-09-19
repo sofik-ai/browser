@@ -2,6 +2,7 @@
 
 #include "sofik/engine/view.h"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 
@@ -33,6 +34,8 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/javascript_dialog_manager.h"
+#include "content/public/browser/media_capture_devices.h"
+#include "content/public/browser/media_stream_request.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
 #include "headless/public/headless_browser_context.h"
 #include "headless/public/headless_web_contents.h"
@@ -51,6 +54,7 @@
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
@@ -190,6 +194,10 @@ View::~View() {
         pending.types.size(), blink::mojom::PermissionStatus::ASK));
   }
   permissions_.clear();
+  std::map<uint32_t, MediaRequest> media_requests = std::move(media_requests_);
+  for (auto& [request, pending] : media_requests) {
+    AnswerMediaRequest(std::move(pending), 0);
+  }
   devtools_frontend_.reset();
   for (auto& [request, pending] : file_requests_) {
     pending.listener->FileSelectionCanceled();
@@ -931,6 +939,13 @@ void View::OnPermissionsRequested(
 }
 
 void View::AnswerPermission(uint32_t request, uint32_t granted) {
+  if (auto media = media_requests_.find(request);
+      media != media_requests_.end()) {
+    MediaRequest pending = std::move(media->second);
+    media_requests_.erase(media);
+    AnswerMediaRequest(std::move(pending), granted);
+    return;
+  }
   auto found = permissions_.find(request);
   if (found == permissions_.end()) {
     return;
@@ -945,6 +960,166 @@ void View::AnswerPermission(uint32_t request, uint32_t granted) {
                            : blink::mojom::PermissionStatus::DENIED);
   }
   std::move(pending.callback).Run(statuses);
+}
+
+// ---- camera and microphone --------------------------------------------------
+
+namespace {
+
+// Tells the view while a stream it allowed is open.
+class StreamIndicator : public content::MediaStreamUI {
+ public:
+  using Changed = base::RepeatingCallback<void(int video, int audio)>;
+  StreamIndicator(bool video, bool audio, Changed changed)
+      : video_(video), audio_(audio), changed_(std::move(changed)) {}
+  ~StreamIndicator() override {
+    if (started_) {
+      changed_.Run(video_ ? -1 : 0, audio_ ? -1 : 0);
+    }
+  }
+
+  gfx::NativeViewId OnStarted(base::RepeatingClosure stop,
+                              SourceCallback source,
+                              const std::string& label,
+                              std::vector<content::DesktopMediaID> screen_ids,
+                              StateChangeCallback state_change) override {
+    if (!started_) {
+      started_ = true;
+      changed_.Run(video_ ? 1 : 0, audio_ ? 1 : 0);
+    }
+    return 0;
+  }
+  void OnDeviceStoppedForSourceChange(
+      const std::string& label,
+      const content::DesktopMediaID& old_media_id,
+      const content::DesktopMediaID& new_media_id,
+      bool captured_surface_control_active) override {}
+  void OnDeviceStopped(const std::string& label,
+                       const content::DesktopMediaID& media_id) override {}
+
+ private:
+  const bool video_;
+  const bool audio_;
+  const Changed changed_;
+  bool started_ = false;
+};
+
+// The device the page named, or the system's default, which comes first.
+std::optional<blink::MediaStreamDevice> PickDevice(
+    const blink::MediaStreamDevices& devices,
+    const std::vector<std::string>& requested_ids) {
+  if (devices.empty()) {
+    return std::nullopt;
+  }
+  for (const std::string& id : requested_ids) {
+    for (const blink::MediaStreamDevice& device : devices) {
+      if (!id.empty() && device.id == id) {
+        return device;
+      }
+    }
+  }
+  return devices.front();
+}
+
+}  // namespace
+
+View::MediaRequest::MediaRequest(const content::MediaStreamRequest& request,
+                                 content::MediaResponseCallback callback)
+    : request(request), callback(std::move(callback)) {}
+View::MediaRequest::MediaRequest(MediaRequest&&) = default;
+View::MediaRequest::~MediaRequest() = default;
+
+bool View::OnMediaAccessRequested(const content::MediaStreamRequest& request,
+                                  content::MediaResponseCallback callback) {
+  using blink::mojom::MediaStreamType;
+  uint32_t asked = 0;
+  if (request.audio_type == MediaStreamType::DEVICE_AUDIO_CAPTURE) {
+    asked |= SOFIK_PERMISSION_MICROPHONE;
+  }
+  if (request.video_type == MediaStreamType::DEVICE_VIDEO_CAPTURE) {
+    asked |= SOFIK_PERMISSION_CAMERA;
+  }
+  // Screen and tab capture need a source picker the engine does not have.
+  if (asked == 0 || !callbacks_.on_permission_request) {
+    return false;
+  }
+  const uint32_t id = next_request_++;
+  media_requests_.emplace(id, MediaRequest(request, std::move(callback)));
+  callbacks_.on_permission_request(
+      user_, id_, id, request.url_origin.GetURL().spec().c_str(), asked);
+  return true;
+}
+
+void View::AnswerMediaRequest(MediaRequest pending, uint32_t granted) {
+  using blink::mojom::MediaStreamRequestResult;
+  using blink::mojom::MediaStreamType;
+  const content::MediaStreamRequest& request = pending.request;
+  const bool wants_audio =
+      request.audio_type == MediaStreamType::DEVICE_AUDIO_CAPTURE;
+  const bool wants_video =
+      request.video_type == MediaStreamType::DEVICE_VIDEO_CAPTURE;
+  // All or nothing, as a browser's own prompt: a page that asked for both
+  // and is handed one gets a stream it did not ask for.
+  if ((wants_audio && !(granted & SOFIK_PERMISSION_MICROPHONE)) ||
+      (wants_video && !(granted & SOFIK_PERMISSION_CAMERA))) {
+    std::move(pending.callback)
+        .Run(blink::mojom::StreamDevicesSet(),
+             MediaStreamRequestResult::PERMISSION_DENIED, nullptr);
+    return;
+  }
+
+  content::MediaCaptureDevices* system = content::MediaCaptureDevices::GetInstance();
+  auto devices = blink::mojom::StreamDevices::New();
+  if (wants_audio) {
+    devices->audio_device = PickDevice(system->GetAudioCaptureDevices(),
+                                       request.requested_audio_device_ids);
+  }
+  if (wants_video) {
+    devices->video_device = PickDevice(system->GetVideoCaptureDevices(),
+                                       request.requested_video_device_ids);
+  }
+  if ((wants_audio && !devices->audio_device) ||
+      (wants_video && !devices->video_device)) {
+    std::move(pending.callback)
+        .Run(blink::mojom::StreamDevicesSet(),
+             MediaStreamRequestResult::NO_HARDWARE, nullptr);
+    return;
+  }
+  if (wants_audio) {
+    microphone_origins_.insert(request.url_origin);
+  }
+  if (wants_video) {
+    camera_origins_.insert(request.url_origin);
+  }
+  blink::mojom::StreamDevicesSet set;
+  set.stream_devices.push_back(std::move(devices));
+  std::move(pending.callback)
+      .Run(set, MediaStreamRequestResult::OK,
+           std::make_unique<StreamIndicator>(
+               wants_video, wants_audio,
+               base::BindRepeating(&View::MediaStreamChanged,
+                                   weak_ptr_factory_.GetWeakPtr())));
+}
+
+bool View::HasMediaAccess(const url::Origin& origin,
+                          blink::mojom::MediaStreamType type) {
+  using blink::mojom::MediaStreamType;
+  if (type == MediaStreamType::DEVICE_AUDIO_CAPTURE) {
+    return microphone_origins_.contains(origin);
+  }
+  if (type == MediaStreamType::DEVICE_VIDEO_CAPTURE) {
+    return camera_origins_.contains(origin);
+  }
+  return false;
+}
+
+void View::MediaStreamChanged(int video_delta, int audio_delta) {
+  video_streams_ = std::max(0, video_streams_ + video_delta);
+  audio_streams_ = std::max(0, audio_streams_ + audio_delta);
+  if (callbacks_.on_media_access) {
+    callbacks_.on_media_access(user_, id_, video_streams_ > 0,
+                               audio_streams_ > 0);
+  }
 }
 
 // ---- file choosers ----------------------------------------------------------

@@ -49,6 +49,7 @@
 #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/mojom/content_extraction/ai_page_content.mojom.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -261,6 +262,36 @@ class HeadlessWebContentsImpl::Delegate : public content::WebContentsDelegate {
     HeadlessEmbedderDelegate* embedder =
         headless_web_contents_->embedder_delegate();
     return embedder ? embedder->GetJavaScriptDialogManager() : nullptr;
+  }
+
+  void RequestMediaAccessPermission(
+      content::WebContents* web_contents,
+      const content::MediaStreamRequest& request,
+      content::MediaResponseCallback callback) override {
+    // Sofik: the content layer's default fails the request.
+    HeadlessEmbedderDelegate* embedder =
+        headless_web_contents_->embedder_delegate();
+    if (!embedder) {
+      std::move(callback).Run(
+          blink::mojom::StreamDevicesSet(),
+          blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED, nullptr);
+      return;
+    }
+    // The embedder either takes the callback or leaves it untouched.
+    auto shared = base::SplitOnceCallback(std::move(callback));
+    if (!embedder->OnMediaAccessRequested(request, std::move(shared.first))) {
+      std::move(shared.second)
+          .Run(blink::mojom::StreamDevicesSet(),
+               blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED, nullptr);
+    }
+  }
+
+  bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
+                                  const url::Origin& security_origin,
+                                  blink::mojom::MediaStreamType type) override {
+    HeadlessEmbedderDelegate* embedder =
+        headless_web_contents_->embedder_delegate();
+    return embedder && embedder->HasMediaAccess(security_origin, type);
   }
 
   void RunFileChooser(content::RenderFrameHost* render_frame_host,

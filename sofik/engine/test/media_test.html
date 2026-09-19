@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- sofik_engine_host --allow-media --after-ms=3500 --eval="report()"
+       "--switches=--use-fake-device-for-media-stream" <this file>
+     Asks for the microphone on load and holds the stream for a second. Fake
+     devices, so that the operating system's own prompt stays out of a test. -->
+<meta charset="utf-8">
+<title>media test</title>
+<script>
+const result = {before: null, stream: null, after: null};
+(async () => {
+  const labels = async () =>
+      (await navigator.mediaDevices.enumerateDevices())
+          .filter(d => d.kind === "audioinput").map(d => d.label);
+  result.before = await labels();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    result.stream = stream.getAudioTracks().map(t => t.label);
+    result.after = await labels();
+    setTimeout(() => stream.getTracks().forEach(t => t.stop()), 1000);
+  } catch (e) {
+    result.stream = e.name;
+  }
+})();
+function report() { return JSON.stringify(result); }
+</script>

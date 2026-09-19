@@ -181,6 +181,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property BOOL viewTest;
 @property BOOL nativeView;
 @property BOOL devtools;
+@property BOOL allowMic;
 @property(strong) NSWindow* devtoolsWindow;
 @property(copy) NSString* switches;
 @property(copy) NSString* uploadPath;
@@ -247,13 +248,20 @@ static void OnDialog(void*, sofik_view_id view, uint32_t request,
 }
 static void OnPermission(void*, sofik_view_id view, uint32_t request,
                          const char* origin, uint32_t permissions) {
-  // This host allows notifications and nothing else.
-  uint32_t granted = permissions & SOFIK_PERMISSION_NOTIFICATIONS;
+  // This host allows notifications, and camera and microphone with --allow-media.
+  uint32_t allowed = SOFIK_PERMISSION_NOTIFICATIONS;
+  if (g_host.allowMic) {
+    allowed |= SOFIK_PERMISSION_MICROPHONE | SOFIK_PERMISSION_CAMERA;
+  }
+  uint32_t granted = permissions & allowed;
   NSLog(@"sofik host: permission origin=%s asked=0x%x granted=0x%x", origin,
         permissions, granted);
   dispatch_async(dispatch_get_main_queue(), ^{
     sofik_view_answer_permission(view, request, granted);
   });
+}
+static void OnMediaAccess(void*, sofik_view_id, int video, int audio) {
+  NSLog(@"sofik host: media access video=%d audio=%d", video, audio);
 }
 static void OnPopup(void*, sofik_view_id, const char* url, int gesture) {
   NSLog(@"sofik host: popup requested %s gesture=%d", url, gesture);
@@ -402,6 +410,7 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   callbacks.on_focused_node_changed = OnFocusedNode;
   callbacks.on_ime_composition_bounds = OnImeBounds;
   callbacks.on_permission_request = OnPermission;
+  callbacks.on_media_access = OnMediaAccess;
 
   sofik_view_config config = {};
   config.url = self.url.UTF8String;
@@ -702,6 +711,8 @@ int main(int argc, const char** argv) {
         g_host.uploadPath = [arg substringFromIndex:9];
       } else if ([arg hasPrefix:@"--switches="]) {
         g_host.switches = [arg substringFromIndex:11];
+      } else if ([arg isEqualToString:@"--allow-media"]) {
+        g_host.allowMic = YES;
       } else if ([arg isEqualToString:@"--devtools"]) {
         g_host.devtools = YES;
       } else if ([arg isEqualToString:@"--native-view"]) {

@@ -21,6 +21,8 @@
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/network_quality_observer_factory.h"
+#include "content/public/browser/network_service_instance.h"
 #include "headless/lib/browser/headless_browser_context_impl.h"
 #include "headless/lib/browser/headless_platform_delegate.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
@@ -298,6 +300,13 @@ void HeadlessBrowserImpl::PreMainMessageLoopRun() {
 
   platform_delegate_->Initialize(options_.value());
 
+  if (UsesBrowserIdentity()) {
+    network_quality_tracker_ = std::make_unique<network::NetworkQualityTracker>(
+        base::BindRepeating(&content::GetNetworkService));
+    network_quality_observer_ =
+        content::CreateNetworkQualityObserver(network_quality_tracker_.get());
+  }
+
   // We don't support the tethering domain on this agent host.
   agent_host_ = content::DevToolsAgentHost::CreateForBrowser(
       nullptr, content::DevToolsAgentHost::CreateServerSocketCallback());
@@ -312,6 +321,8 @@ void HeadlessBrowserImpl::WillRunMainMessageLoop(base::RunLoop& run_loop) {
 }
 
 void HeadlessBrowserImpl::PostMainMessageLoopRun() {
+  network_quality_observer_.reset();
+  network_quality_tracker_.reset();
   os_crypt_async_.reset();
 #if defined(HEADLESS_USE_PREFS)
   if (local_state_) {

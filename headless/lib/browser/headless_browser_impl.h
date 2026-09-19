@@ -16,6 +16,7 @@
 #include "build/build_config.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "headless/public/headless_browser.h"
+#include "services/network/public/cpp/network_quality_tracker.h"
 #include "headless/public/headless_export.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -128,6 +129,15 @@ class HEADLESS_EXPORT HeadlessBrowserImpl : public HeadlessBrowser {
   raw_ptr<HeadlessBrowserContext, AcrossTasksDanglingUntriaged>
       default_browser_context_ = nullptr;
   scoped_refptr<content::DevToolsAgentHost> agent_host_;
+
+  // Sofik: what navigator.connection reads. Nothing in the content layer
+  // forwards the network service's estimates to renderers unless the embedder
+  // asks, and a page that is never told reads rtt 0 -- a link faster than any
+  // that exists.
+  std::unique_ptr<network::NetworkQualityTracker> network_quality_tracker_;
+  std::unique_ptr<
+      network::NetworkQualityTracker::RTTAndThroughputEstimatesObserver>
+      network_quality_observer_;
   std::unique_ptr<HeadlessRequestContextManager>
       system_request_context_manager_;
   base::OnceClosure quit_main_message_loop_;

@@ -28,6 +28,7 @@ class WebContents;
 namespace headless {
 class HeadlessBrowserImpl;
 class HeadlessClientHintsControllerDelegate;
+class HeadlessNotificationService;
 class HeadlessWebContentsImpl;
 
 class HEADLESS_EXPORT HeadlessBrowserContextImpl final
@@ -118,6 +119,7 @@ class HEADLESS_EXPORT HeadlessBrowserContextImpl final
 
   raw_ptr<HeadlessBrowserImpl> browser_;  // Not owned.
   std::unique_ptr<HeadlessBrowserContextOptions> context_options_;
+  std::unique_ptr<HeadlessNotificationService> notification_service_;
   raw_ptr<content::DownloadManagerDelegate> download_manager_delegate_ =
       nullptr;
   base::FilePath path_;

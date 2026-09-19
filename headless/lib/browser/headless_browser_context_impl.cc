@@ -25,7 +25,9 @@
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_browser_main_parts.h"
 #include "headless/lib/browser/headless_client_hints_controller_delegate.h"
+#include "headless/lib/browser/headless_notification_service.h"
 #include "headless/lib/browser/headless_permission_manager.h"
+#include "headless/public/headless_browser.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
 #include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -201,7 +203,14 @@ HeadlessBrowserContextImpl::GetSpecialStoragePolicy() {
 
 content::PlatformNotificationService*
 HeadlessBrowserContextImpl::GetPlatformNotificationService() {
-  return nullptr;
+  // Sofik: see HeadlessNotificationService for what its absence gives away.
+  if (!HeadlessBrowser::UsesBrowserIdentity()) {
+    return nullptr;
+  }
+  if (!notification_service_) {
+    notification_service_ = std::make_unique<HeadlessNotificationService>();
+  }
+  return notification_service_.get();
 }
 
 content::PushMessagingService*

@@ -3,6 +3,7 @@
 #ifndef SOFIK_ENGINE_VIEW_H_
 #define SOFIK_ENGINE_VIEW_H_
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -11,7 +12,9 @@
 #include "base/memory/scoped_refptr.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
 #include "content/public/browser/devtools_agent_host_client.h"
+#include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "headless/public/headless_embedder_delegate.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "sofik/engine/sofik_engine.h"
 #include "ui/gfx/geometry/size.h"
@@ -32,7 +35,9 @@ namespace sofik {
 // events it reports. Everything runs on the engine's UI thread.
 class View : public content::WebContentsObserver,
              public viz::mojom::FrameSinkVideoConsumer,
-             public content::DevToolsAgentHostClient {
+             public content::DevToolsAgentHostClient,
+             public headless::HeadlessEmbedderDelegate,
+             public content::JavaScriptDialogManager {
  public:
   static std::unique_ptr<View> Create(sofik_view_id id,
                                       headless::HeadlessBrowserContext* context,
@@ -65,6 +70,8 @@ class View : public content::WebContentsObserver,
                   uint32_t modifiers);
   void Key(sofik_key_type type, int windows_key_code, int native_key_code,
            uint32_t character, uint32_t modifiers);
+
+  void AnswerDialog(uint32_t request, bool accepted, const std::string& prompt);
 
   void CdpAttach(sofik_cdp_callback callback, void* user);
   void CdpSend(const std::string& message);
@@ -117,6 +124,28 @@ class View : public content::WebContentsObserver,
   void OnLog(const std::string& message) override {}
   void OnNewCaptureVersion(const media::CaptureVersion& version) override {}
 
+  // headless::HeadlessEmbedderDelegate:
+  bool OnNewWindowRequested(const GURL& url, bool user_gesture) override;
+  content::JavaScriptDialogManager* GetJavaScriptDialogManager() override;
+
+  // content::JavaScriptDialogManager:
+  void RunJavaScriptDialog(content::WebContents* web_contents,
+                           content::RenderFrameHost* frame,
+                           content::JavaScriptDialogType type,
+                           const std::u16string& message,
+                           const std::u16string& default_prompt,
+                           DialogClosedCallback callback,
+                           bool* did_suppress_message) override;
+  void RunBeforeUnloadDialog(content::WebContents* web_contents,
+                             content::RenderFrameHost* frame,
+                             bool is_reload,
+                             DialogClosedCallback callback) override;
+  bool HandleJavaScriptDialog(content::WebContents* web_contents,
+                              bool accept,
+                              const std::u16string* prompt_override) override;
+  void CancelDialogs(content::WebContents* web_contents,
+                     bool reset_state) override;
+
   // content::DevToolsAgentHostClient:
   void DispatchProtocolMessage(content::DevToolsAgentHost* host,
                                base::span<const uint8_t> message) override;
@@ -136,6 +165,10 @@ class View : public content::WebContentsObserver,
   // the host is promised a surface that stays valid that long. Exactly one is
   // ever held, so capture cannot be starved of buffers.
   mojo::Remote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks> held_frame_;
+
+  // Dialogs the page is blocked on, by the request number given to the host.
+  std::map<uint32_t, DialogClosedCallback> dialogs_;
+  uint32_t next_request_ = 1;
 
   scoped_refptr<content::DevToolsAgentHost> cdp_host_;
   sofik_cdp_callback cdp_callback_ = nullptr;

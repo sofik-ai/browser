@@ -18,6 +18,7 @@
 #include "headless/lib/browser/headless_window.h"
 #include "headless/lib/browser/headless_window_delegate.h"
 #include "headless/lib/browser/headless_window_tree_host.h"
+#include "headless/public/headless_embedder_delegate.h"
 #include "headless/public/headless_export.h"
 #include "headless/public/headless_web_contents.h"
 #include "headless/public/headless_window_state.h"
@@ -61,6 +62,14 @@ class HEADLESS_EXPORT HeadlessWebContentsImpl : public HeadlessWebContents,
   void Close() override;
 
   HeadlessBrowserImpl* browser() const;
+
+  // Sofik: see headless_embedder_delegate.h. Not owned.
+  void set_embedder_delegate(HeadlessEmbedderDelegate* delegate) {
+    embedder_delegate_ = delegate;
+  }
+  HeadlessEmbedderDelegate* embedder_delegate() const {
+    return embedder_delegate_;
+  }
   HeadlessBrowserContextImpl* browser_context() const;
 
   void set_window_tree_host(std::unique_ptr<HeadlessWindowTreeHost> host) {
@@ -117,6 +126,7 @@ class HEADLESS_EXPORT HeadlessWebContentsImpl : public HeadlessWebContents,
 
   class Delegate;
   std::unique_ptr<Delegate> web_contents_delegate_;
+  raw_ptr<HeadlessEmbedderDelegate> embedder_delegate_ = nullptr;
   std::unique_ptr<HeadlessWindowTreeHost> window_tree_host_;
   std::unique_ptr<HeadlessWindow> headless_window_;
   int window_id_ = 0;

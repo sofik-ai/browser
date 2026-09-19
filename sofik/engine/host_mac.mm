@@ -172,6 +172,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property(copy) NSString* shotPath;
 @property int shotAfterMs;
 @property BOOL inputTest;
+@property BOOL dialogTest;
 @property int frames;
 @end
 
@@ -218,6 +219,21 @@ static void OnLoading(void*, sofik_view_id, int loading, int back, int fwd) {
 static void OnLoadError(void*, sofik_view_id, int code, const char* text,
                         const char* url) {
   NSLog(@"sofik host: load error %d %s for %s", code, text, url);
+}
+static void OnDialog(void*, sofik_view_id view, uint32_t request,
+                     sofik_dialog_kind kind, const char* message,
+                     const char* default_prompt) {
+  NSLog(@"sofik host: dialog kind=%d message=%@ default=%@", kind, @(message),
+        @(default_prompt));
+  // A real host shows its own UI here. Answered on a later turn of the loop,
+  // as a person would: the page stays blocked in between.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    sofik_view_answer_dialog(view, request, 1,
+                             kind == SOFIK_DIALOG_PROMPT ? "Sofik" : NULL);
+  });
+}
+static void OnPopup(void*, sofik_view_id, const char* url, int gesture) {
+  NSLog(@"sofik host: popup requested %s gesture=%d", url, gesture);
 }
 static void OnCdp(void*, sofik_view_id, const char* message) {
   NSString* text = @(message);
@@ -272,6 +288,8 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   callbacks.on_address_changed = OnAddress;
   callbacks.on_loading_state = OnLoading;
   callbacks.on_load_error = OnLoadError;
+  callbacks.on_dialog = OnDialog;
+  callbacks.on_popup_requested = OnPopup;
 
   sofik_view_config config = {};
   config.url = self.url.UTF8String;
@@ -285,6 +303,29 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     return;
   }
   sofik_view_set_focus(g_view, 1);
+
+  if (self.dialogTest) {
+    sofik_view_cdp_attach(g_view, OnCdp, nullptr);
+    auto after = ^(int ms, dispatch_block_t block) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ms * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), block);
+    };
+    after(1500, ^{
+      sofik_view_mouse_move(g_view, 100, 40, 0, 0);
+      sofik_view_mouse_button(g_view, 100, 40, SOFIK_BUTTON_LEFT, 0, 1,
+                              SOFIK_MOD_LEFT_BUTTON);
+      sofik_view_mouse_button(g_view, 100, 40, SOFIK_BUTTON_LEFT, 1, 1, 0);
+    });
+    after(3500, ^{
+      sofik_view_cdp_send(g_view,
+                          "{\"id\":9,\"method\":\"Runtime.evaluate\","
+                          "\"params\":{\"expression\":\"report()\"}}");
+    });
+    after(4300, ^{
+      [NSApp terminate:nil];
+    });
+    return;
+  }
 
   if (self.inputTest) {
     // Drives the input API against a page that records what it received.
@@ -389,6 +430,8 @@ int main(int argc, const char** argv) {
       NSString* arg = @(argv[i]);
       if ([arg hasPrefix:@"--shot="]) {
         g_host.shotPath = [arg substringFromIndex:7];
+      } else if ([arg isEqualToString:@"--dialog-test"]) {
+        g_host.dialogTest = YES;
       } else if ([arg isEqualToString:@"--input-test"]) {
         g_host.inputTest = YES;
       } else if ([arg hasPrefix:@"--after-ms="]) {

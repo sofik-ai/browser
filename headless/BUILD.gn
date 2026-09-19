@@ -364,6 +364,7 @@ source_set("headless_browser") {
     "lib/browser/protocol/target_handler.h",
     "public/headless_browser.h",
     "public/headless_browser_context.h",
+    "public/headless_embedder_delegate.h",
     "public/headless_web_contents.h",
     "public/headless_window_state.h",
   ]

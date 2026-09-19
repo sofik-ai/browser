@@ -195,6 +195,13 @@ class HeadlessWebContentsImpl::Delegate : public content::WebContentsDelegate {
       case WindowOpenDisposition::NEW_WINDOW:
       case WindowOpenDisposition::NEW_BACKGROUND_TAB:
       case WindowOpenDisposition::NEW_FOREGROUND_TAB: {
+        // Sofik: the embedder decides where a new window goes.
+        if (HeadlessEmbedderDelegate* embedder =
+                headless_web_contents_->embedder_delegate();
+            embedder &&
+            embedder->OnNewWindowRequested(params.url, params.user_gesture)) {
+          return nullptr;
+        }
         HeadlessWebContentsImpl* child_contents = HeadlessWebContentsImpl::From(
             headless_web_contents_->browser_context()
                 ->CreateWebContentsBuilder()
@@ -234,9 +241,26 @@ class HeadlessWebContentsImpl::Delegate : public content::WebContentsDelegate {
       const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url) override {
+    // Sofik: "overridden" means the content layer creates no web contents for
+    // window.open, which is what an embedder that took the request wants.
+    if (HeadlessEmbedderDelegate* embedder =
+            headless_web_contents_->embedder_delegate();
+        embedder && embedder->OnNewWindowRequested(
+                        target_url,
+                        opener && opener->HasTransientUserActivation())) {
+      return true;
+    }
     return headless_web_contents_->browser_context()
         ->options()
         ->block_new_web_contents();
+  }
+
+  content::JavaScriptDialogManager* GetJavaScriptDialogManager(
+      content::WebContents* source) override {
+    // Sofik: without one the content layer shows no dialog at all.
+    HeadlessEmbedderDelegate* embedder =
+        headless_web_contents_->embedder_delegate();
+    return embedder ? embedder->GetJavaScriptDialogManager() : nullptr;
   }
 
   void EnumerateDirectory(content::WebContents* web_contents,

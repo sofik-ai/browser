@@ -24,6 +24,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/host_zoom_map.h"
+#include "content/public/browser/javascript_dialog_manager.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
 #include "headless/public/headless_browser_context.h"
 #include "headless/public/headless_web_contents.h"
@@ -128,6 +129,7 @@ std::unique_ptr<View> View::Create(sofik_view_id id,
       new View(id, headless::HeadlessWebContentsImpl::From(contents), config,
                callbacks, user));
   view->size_dips_ = size;
+  view->contents_->set_embedder_delegate(view.get());
   view->StartCapture();
   return view;
 }
@@ -146,6 +148,10 @@ View::View(sofik_view_id id,
       frame_rate_(config.frame_rate > 0 ? config.frame_rate : 60) {}
 
 View::~View() {
+  CancelDialogs(nullptr, /*reset_state=*/true);
+  if (contents_) {
+    contents_->set_embedder_delegate(nullptr);
+  }
   CdpDetach();
   capturer_.reset();
   held_frame_.reset();
@@ -563,6 +569,91 @@ void View::WebContentsDestroyed() {
                      id_));
 }
 
+// ---- new windows and dialogs ------------------------------------------------
+
+bool View::OnNewWindowRequested(const GURL& url, bool user_gesture) {
+  // Always taken, host or no host: a Browser Card is one page, and a window
+  // nobody asked for and nobody can see is the worst answer available.
+  if (callbacks_.on_popup_requested) {
+    callbacks_.on_popup_requested(user_, id_, url.spec().c_str(), user_gesture);
+  }
+  return true;
+}
+
+content::JavaScriptDialogManager* View::GetJavaScriptDialogManager() {
+  return this;
+}
+
+void View::RunJavaScriptDialog(content::WebContents* web_contents,
+                               content::RenderFrameHost* frame,
+                               content::JavaScriptDialogType type,
+                               const std::u16string& message,
+                               const std::u16string& default_prompt,
+                               DialogClosedCallback callback,
+                               bool* did_suppress_message) {
+  if (!callbacks_.on_dialog) {
+    // Nobody to ask. The content layer then answers for us, so that alert()
+    // returns instead of hanging the page.
+    *did_suppress_message = true;
+    return;
+  }
+  const uint32_t request = next_request_++;
+  dialogs_[request] = std::move(callback);
+  sofik_dialog_kind kind =
+      type == content::JAVASCRIPT_DIALOG_TYPE_CONFIRM  ? SOFIK_DIALOG_CONFIRM
+      : type == content::JAVASCRIPT_DIALOG_TYPE_PROMPT ? SOFIK_DIALOG_PROMPT
+                                                       : SOFIK_DIALOG_ALERT;
+  callbacks_.on_dialog(user_, id_, request, kind,
+                       base::UTF16ToUTF8(message).c_str(),
+                       base::UTF16ToUTF8(default_prompt).c_str());
+}
+
+void View::RunBeforeUnloadDialog(content::WebContents* web_contents,
+                                 content::RenderFrameHost* frame,
+                                 bool is_reload,
+                                 DialogClosedCallback callback) {
+  if (!callbacks_.on_dialog) {
+    // Leaving is what was asked for; a page must not be able to veto it
+    // unseen.
+    std::move(callback).Run(true, std::u16string());
+    return;
+  }
+  const uint32_t request = next_request_++;
+  dialogs_[request] = std::move(callback);
+  callbacks_.on_dialog(user_, id_, request, SOFIK_DIALOG_BEFORE_UNLOAD, "", "");
+}
+
+void View::AnswerDialog(uint32_t request, bool accepted,
+                        const std::string& prompt) {
+  auto found = dialogs_.find(request);
+  if (found == dialogs_.end()) {
+    return;
+  }
+  DialogClosedCallback callback = std::move(found->second);
+  dialogs_.erase(found);
+  std::move(callback).Run(accepted, base::UTF8ToUTF16(prompt));
+}
+
+bool View::HandleJavaScriptDialog(content::WebContents* web_contents,
+                                  bool accept,
+                                  const std::u16string* prompt_override) {
+  // DevTools' Page.handleJavaScriptDialog: an agent answering for itself.
+  if (dialogs_.empty()) {
+    return false;
+  }
+  AnswerDialog(dialogs_.begin()->first, accept,
+               prompt_override ? base::UTF16ToUTF8(*prompt_override) : "");
+  return true;
+}
+
+void View::CancelDialogs(content::WebContents* web_contents, bool reset_state) {
+  std::map<uint32_t, DialogClosedCallback> pending = std::move(dialogs_);
+  dialogs_.clear();
+  for (auto& [request, callback] : pending) {
+    std::move(callback).Run(false, std::u16string());
+  }
+}
+
 // ---- DevTools ---------------------------------------------------------------
 
 void View::CdpAttach(sofik_cdp_callback callback, void* user) {
@@ -724,6 +815,13 @@ void sofik_view_key(sofik_view_id id, sofik_key_type type, int windows_key_code,
                     uint32_t modifiers) {
   if (sofik::View* view = Find(id)) {
     view->Key(type, windows_key_code, native_key_code, character, modifiers);
+  }
+}
+
+void sofik_view_answer_dialog(sofik_view_id id, uint32_t request, int accepted,
+                              const char* prompt) {
+  if (sofik::View* view = Find(id)) {
+    view->AnswerDialog(request, accepted != 0, prompt ? prompt : "");
   }
 }
 

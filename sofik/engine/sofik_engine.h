@@ -26,9 +26,8 @@
  * the address, title, favicon, loading, load-error, console, cursor, tooltip,
  * focused-node, IME-bounds and closed events, new-window requests, JavaScript
  * dialogs (alert, confirm, prompt, beforeunload), downloads, permission
- * prompts, and the DevTools session. Declared but not delivered yet: file
- * dialogs and on_before_navigation -- sofik_view_answer_file_dialog fails at
- * link time rather than silently doing nothing.
+ * prompts, file choosers, navigation vetoes, and the DevTools session.
+ * Everything declared here is delivered.
  */
 
 #ifndef SOFIK_ENGINE_SOFIK_ENGINE_H_
@@ -183,7 +182,9 @@ typedef struct sofik_view_callbacks {
   /* The text being composed, in DIPs relative to the view. */
   void (*on_ime_composition_bounds)(void* user, sofik_view_id, sofik_rect bounds);
 
-  /* Return non-zero to cancel. A popup is never opened by the engine itself:
+  /* Return non-zero to cancel. Asked for every request of the main frame and
+   * every redirect of it, except the URL the view was created with. A popup
+   * is never opened by the engine itself:
    * the host decides, usually by loading `url` in a view of its own. */
   int (*on_before_navigation)(void* user, sofik_view_id, const char* url,
                               int is_user_gesture, int is_redirect);
@@ -283,7 +284,8 @@ SOFIK_EXPORT void sofik_view_ime_cancel(sofik_view_id);
 
 SOFIK_EXPORT void sofik_view_answer_dialog(sofik_view_id, uint32_t request,
                                            int accepted, const char* prompt);
-/* `paths` is `count` UTF-8 strings; count 0 cancels. */
+/* `paths` is `count` UTF-8 strings; count 0 cancels. For a folder request it
+ * is the one folder, and the engine lists the files under it. */
 SOFIK_EXPORT void sofik_view_answer_file_dialog(sofik_view_id, uint32_t request,
                                                 const char* const* paths,
                                                 size_t count);

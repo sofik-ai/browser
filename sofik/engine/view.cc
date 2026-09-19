@@ -5,12 +5,16 @@
 #include <optional>
 #include <utility>
 
+#include "base/files/file_enumerator.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/input/native_web_keyboard_event.h"
@@ -18,6 +22,7 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/download_manager.h"
+#include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
@@ -43,6 +48,7 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
+#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
@@ -180,6 +186,10 @@ View::~View() {
         pending.types.size(), blink::mojom::PermissionStatus::ASK));
   }
   permissions_.clear();
+  for (auto& [request, pending] : file_requests_) {
+    pending.listener->FileSelectionCanceled();
+  }
+  file_requests_.clear();
   if (contents_) {
     contents_->set_embedder_delegate(nullptr);
     contents_view_->set_delegate(nullptr);
@@ -750,6 +760,14 @@ bool View::OnNewWindowRequested(const GURL& url, bool user_gesture) {
   return true;
 }
 
+bool View::OnBeforeNavigation(const GURL& url,
+                              bool user_gesture,
+                              bool is_redirect) {
+  return callbacks_.on_before_navigation &&
+         callbacks_.on_before_navigation(user_, id_, url.spec().c_str(),
+                                         user_gesture, is_redirect) != 0;
+}
+
 content::JavaScriptDialogManager* View::GetJavaScriptDialogManager() {
   return this;
 }
@@ -895,6 +913,101 @@ void View::AnswerPermission(uint32_t request, uint32_t granted) {
                            : blink::mojom::PermissionStatus::DENIED);
   }
   std::move(pending.callback).Run(statuses);
+}
+
+// ---- file choosers ----------------------------------------------------------
+
+namespace {
+
+blink::mojom::FileChooserFileInfoPtr ToFileInfo(const base::FilePath& path) {
+  return blink::mojom::FileChooserFileInfo::NewNativeFile(
+      blink::mojom::NativeFileInfo::New(path, std::u16string(),
+                                        std::vector<std::u16string>()));
+}
+
+// <input webkitdirectory> wants the files under the folder, not the folder.
+std::vector<blink::mojom::FileChooserFileInfoPtr> FilesUnder(
+    const base::FilePath& folder) {
+  std::vector<blink::mojom::FileChooserFileInfoPtr> files;
+  base::FileEnumerator walk(folder, /*recursive=*/true,
+                            base::FileEnumerator::FILES);
+  for (base::FilePath path = walk.Next(); !path.empty(); path = walk.Next()) {
+    files.push_back(ToFileInfo(path));
+  }
+  return files;
+}
+
+}  // namespace
+
+View::FileRequest::FileRequest() = default;
+View::FileRequest::FileRequest(FileRequest&&) = default;
+View::FileRequest::~FileRequest() = default;
+
+bool View::OnFileChooser(scoped_refptr<content::FileSelectListener> listener,
+                         const blink::mojom::FileChooserParams& params) {
+  using Mode = blink::mojom::FileChooserParams::Mode;
+  if (!callbacks_.on_file_dialog || params.mode == Mode::kSave) {
+    return false;  // Headless cancels it.
+  }
+  const uint32_t request = next_request_++;
+  FileRequest pending;
+  pending.listener = std::move(listener);
+  pending.is_folder = params.mode == Mode::kUploadFolder ||
+                      params.mode == Mode::kOpenDirectory;
+  pending.wants_descendants = params.mode == Mode::kUploadFolder;
+  pending.allow_multiple = params.mode == Mode::kOpenMultiple;
+  const bool is_folder = pending.is_folder;
+  const bool allow_multiple = pending.allow_multiple;
+  file_requests_.emplace(request, std::move(pending));
+
+  std::vector<std::string> accept;
+  for (const std::u16string& type : params.accept_types) {
+    accept.push_back(base::UTF16ToUTF8(type));
+  }
+  callbacks_.on_file_dialog(user_, id_, request, allow_multiple, is_folder,
+                            base::JoinString(accept, ",").c_str());
+  return true;
+}
+
+void View::AnswerFileDialog(uint32_t request, std::vector<std::string> paths) {
+  using Mode = blink::mojom::FileChooserParams::Mode;
+  auto found = file_requests_.find(request);
+  if (found == file_requests_.end()) {
+    return;
+  }
+  FileRequest pending = std::move(found->second);
+  file_requests_.erase(found);
+  if (paths.empty()) {
+    pending.listener->FileSelectionCanceled();
+    return;
+  }
+  if (pending.wants_descendants) {
+    const base::FilePath folder(paths.front());
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&FilesUnder, folder),
+        base::BindOnce(
+            [](scoped_refptr<content::FileSelectListener> listener,
+               base::FilePath folder,
+               std::vector<blink::mojom::FileChooserFileInfoPtr> files) {
+              listener->FileSelected(std::move(files), folder,
+                                     Mode::kUploadFolder);
+            },
+            pending.listener, folder));
+    return;
+  }
+  if (!pending.allow_multiple) {
+    paths.resize(1);  // The page asked for one file, whatever the host sent.
+  }
+  std::vector<blink::mojom::FileChooserFileInfoPtr> files;
+  for (const std::string& path : paths) {
+    files.push_back(ToFileInfo(base::FilePath(path)));
+  }
+  pending.listener->FileSelected(
+      std::move(files), base::FilePath(),
+      pending.is_folder        ? Mode::kOpenDirectory
+      : pending.allow_multiple ? Mode::kOpenMultiple
+                               : Mode::kOpen);
 }
 
 void View::CancelDownload(uint32_t download) {
@@ -1101,6 +1214,19 @@ void sofik_view_answer_dialog(sofik_view_id id, uint32_t request, int accepted,
                               const char* prompt) {
   if (sofik::View* view = Find(id)) {
     view->AnswerDialog(request, accepted != 0, prompt ? prompt : "");
+  }
+}
+
+void sofik_view_answer_file_dialog(sofik_view_id id, uint32_t request,
+                                   const char* const* paths, size_t count) {
+  if (sofik::View* view = Find(id)) {
+    std::vector<std::string> list;
+    for (size_t i = 0; paths && i < count; ++i) {
+      if (paths[i] && *paths[i]) {
+        list.emplace_back(paths[i]);
+      }
+    }
+    view->AnswerFileDialog(request, std::move(list));
   }
 }
 

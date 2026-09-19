@@ -22,6 +22,7 @@
 
 namespace content {
 class DevToolsAgentHost;
+class FileSelectListener;
 class RenderWidgetHost;
 }  // namespace content
 
@@ -83,6 +84,7 @@ class View : public content::WebContentsObserver,
   void ImeCancel();
 
   void AnswerDialog(uint32_t request, bool accepted, const std::string& prompt);
+  void AnswerFileDialog(uint32_t request, std::vector<std::string> paths);
   void CancelDownload(uint32_t download);
   void AnswerPermission(uint32_t request, uint32_t granted);
 
@@ -141,10 +143,15 @@ class View : public content::WebContentsObserver,
 
   // headless::HeadlessEmbedderDelegate:
   bool OnNewWindowRequested(const GURL& url, bool user_gesture) override;
+  bool OnBeforeNavigation(const GURL& url,
+                          bool user_gesture,
+                          bool is_redirect) override;
   content::JavaScriptDialogManager* GetJavaScriptDialogManager() override;
   void OnPermissionsRequested(const GURL& origin,
                               const std::vector<blink::PermissionType>& types,
                               PermissionCallback callback) override;
+  bool OnFileChooser(scoped_refptr<content::FileSelectListener> listener,
+                     const blink::mojom::FileChooserParams& params) override;
 
   // content::JavaScriptDialogManager:
   void RunJavaScriptDialog(content::WebContents* web_contents,
@@ -207,6 +214,18 @@ class View : public content::WebContentsObserver,
     PermissionCallback callback;
   };
   std::map<uint32_t, PermissionRequest> permissions_;
+  // File choosers awaiting the host.
+  struct FileRequest {
+    FileRequest();
+    FileRequest(FileRequest&&);
+    ~FileRequest();
+    scoped_refptr<content::FileSelectListener> listener;
+    bool is_folder = false;
+    // The files under the folder are wanted (webkitdirectory), not the folder.
+    bool wants_descendants = false;
+    bool allow_multiple = false;
+  };
+  std::map<uint32_t, FileRequest> file_requests_;
   uint32_t next_request_ = 1;
 
   scoped_refptr<content::DevToolsAgentHost> cdp_host_;

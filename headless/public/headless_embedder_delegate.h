@@ -6,13 +6,16 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "headless/public/headless_export.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "third_party/blink/public/mojom/choosers/file_chooser.mojom-forward.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 
 class GURL;
 
 namespace content {
+class FileSelectListener;
 class JavaScriptDialogManager;
 }
 
@@ -32,6 +35,12 @@ class HEADLESS_EXPORT HeadlessEmbedderDelegate {
   // wherever it sees fit, or nowhere.
   virtual bool OnNewWindowRequested(const GURL& url, bool user_gesture) = 0;
 
+  // The page's main frame is about to request `url`, or was redirected to
+  // it. Return true to cancel: the page stays where it is.
+  virtual bool OnBeforeNavigation(const GURL& url,
+                                  bool user_gesture,
+                                  bool is_redirect) = 0;
+
   // alert, confirm, prompt and beforeunload. Returning nullptr keeps
   // headless's behaviour.
   virtual content::JavaScriptDialogManager* GetJavaScriptDialogManager() = 0;
@@ -46,6 +55,13 @@ class HEADLESS_EXPORT HeadlessEmbedderDelegate {
       const GURL& origin,
       const std::vector<blink::PermissionType>& types,
       PermissionCallback callback) = 0;
+
+  // <input type=file>. Headless on its own cancels it. Return true to take
+  // the request; `listener` must then be answered, FileSelected() or
+  // FileSelectionCanceled(), exactly once.
+  virtual bool OnFileChooser(
+      scoped_refptr<content::FileSelectListener> listener,
+      const blink::mojom::FileChooserParams& params) = 0;
 
  protected:
   virtual ~HeadlessEmbedderDelegate() = default;

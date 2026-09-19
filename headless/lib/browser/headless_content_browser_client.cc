@@ -26,6 +26,8 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/render_process_host.h"
@@ -36,6 +38,8 @@
 #include "headless/lib/browser/headless_bluetooth_delegate.h"
 #include "headless/lib/browser/headless_browser_context_impl.h"
 #include "headless/lib/browser/headless_browser_impl.h"
+#include "headless/lib/browser/headless_web_contents_impl.h"
+#include "headless/public/headless_embedder_delegate.h"
 #include "headless/lib/browser/headless_browser_main_parts.h"
 #include "headless/lib/browser/headless_devtools_manager_delegate.h"
 #include "headless/public/switches.h"
@@ -500,12 +504,47 @@ void HeadlessContentBrowserClient::SessionEnding(
 }
 #endif
 
-#if defined(HEADLESS_USE_POLICY)
+namespace {
+
+// Sofik: lets the embedder veto where its page goes, redirects included.
+class EmbedderNavigationThrottle : public content::NavigationThrottle {
+ public:
+  using content::NavigationThrottle::NavigationThrottle;
+
+  ThrottleCheckResult WillStartRequest() override { return Ask(false); }
+  ThrottleCheckResult WillRedirectRequest() override { return Ask(true); }
+  const char* GetNameForLogging() override {
+    return "EmbedderNavigationThrottle";
+  }
+
+ private:
+  ThrottleCheckResult Ask(bool is_redirect) {
+    auto* contents =
+        HeadlessWebContentsImpl::From(navigation_handle()->GetWebContents());
+    HeadlessEmbedderDelegate* embedder =
+        contents ? contents->embedder_delegate() : nullptr;
+    if (embedder &&
+        embedder->OnBeforeNavigation(navigation_handle()->GetURL(),
+                                     navigation_handle()->HasUserGesture(),
+                                     is_redirect)) {
+      return CANCEL_AND_IGNORE;
+    }
+    return PROCEED;
+  }
+};
+
+}  // namespace
+
 void HeadlessContentBrowserClient::CreateThrottlesForNavigation(
     content::NavigationThrottleRegistry& registry) {
+  content::NavigationHandle& handle = registry.GetNavigationHandle();
+  if (handle.IsInPrimaryMainFrame()) {
+    registry.AddThrottle(
+        std::make_unique<EmbedderNavigationThrottle>(registry));
+  }
+#if defined(HEADLESS_USE_POLICY)
   // Avoid creating naviagtion throttle if preferences are not available
   // (happens in tests).
-  content::NavigationHandle& handle = registry.GetNavigationHandle();
   if (browser_->GetPrefs()) {
     content::BrowserContext* context =
         handle.GetWebContents()->GetBrowserContext();
@@ -514,8 +553,8 @@ void HeadlessContentBrowserClient::CreateThrottlesForNavigation(
         HeadlessPolicyBlocklistServiceFactory::GetForBrowserContext(context),
         SafeSearchFactory::GetForBrowserContext(context)));
   }
-}
 #endif  // defined(HEADLESS_USE_POLICY)
+}
 
 void HeadlessContentBrowserClient::OnNetworkServiceCreated(
     ::network::mojom::NetworkService* network_service) {

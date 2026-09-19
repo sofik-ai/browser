@@ -263,6 +263,18 @@ class HeadlessWebContentsImpl::Delegate : public content::WebContentsDelegate {
     return embedder ? embedder->GetJavaScriptDialogManager() : nullptr;
   }
 
+  void RunFileChooser(content::RenderFrameHost* render_frame_host,
+                      scoped_refptr<content::FileSelectListener> listener,
+                      const blink::mojom::FileChooserParams& params) override {
+    // Sofik: the content layer's default cancels the selection.
+    if (HeadlessEmbedderDelegate* embedder =
+            headless_web_contents_->embedder_delegate();
+        embedder && embedder->OnFileChooser(listener, params)) {
+      return;
+    }
+    listener->FileSelectionCanceled();
+  }
+
   void EnumerateDirectory(content::WebContents* web_contents,
                           scoped_refptr<content::FileSelectListener> listener,
                           const base::FilePath& path) override {

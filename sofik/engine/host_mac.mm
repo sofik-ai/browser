@@ -8,6 +8,7 @@
 //   sofik_engine_host [--shot=/path.png --after-ms=4000] <url>
 //   sofik_engine_host --input-test <url of a page with a report() function>
 //   sofik_engine_host --view-test [--shot=PNG] <url of test/view_test.html>
+//   sofik_engine_host --dialog-test --upload=FILE <url of test/upload_test.html>
 
 #import <Cocoa/Cocoa.h>
 #import <IOSurface/IOSurface.h>
@@ -175,6 +176,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property BOOL inputTest;
 @property BOOL dialogTest;
 @property BOOL viewTest;
+@property(copy) NSString* uploadPath;
 @property(copy) NSString* downloadDir;
 @property(copy) NSString* evalExpression;
 @property int frames;
@@ -269,6 +271,25 @@ static void OnDownloadUpdated(void*, sofik_view_id, const sofik_download* d) {
           d->received_bytes, @(d->path));
   }
 }
+static int OnBeforeNavigation(void*, sofik_view_id, const char* url,
+                              int gesture, int redirect) {
+  // This host lets a page go anywhere except to a URL that says otherwise.
+  const bool blocked = strstr(url, "sofik-blocked") != nullptr;
+  NSLog(@"sofik host: before navigation %s gesture=%d redirect=%d%s", url,
+        gesture, redirect, blocked ? " -> cancelled" : "");
+  return blocked;
+}
+static void OnFileDialog(void*, sofik_view_id view, uint32_t request,
+                         int multiple, int folder, const char* accept) {
+  NSLog(@"sofik host: file dialog multiple=%d folder=%d accept=[%s]", multiple,
+        folder, accept);
+  // A real host opens NSOpenPanel here.
+  NSString* path = g_host.uploadPath;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    const char* paths[] = {path.UTF8String};
+    sofik_view_answer_file_dialog(view, request, paths, path ? 1 : 0);
+  });
+}
 static void OnCursor(void*, sofik_view_id, sofik_cursor cursor) {
   NSLog(@"sofik host: cursor %d", cursor);
   NSCursor* shown = cursor == SOFIK_CURSOR_HAND    ? NSCursor.pointingHandCursor
@@ -354,6 +375,8 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   }
   callbacks.on_popup_requested = OnPopup;
   callbacks.on_cursor = OnCursor;
+  callbacks.on_file_dialog = OnFileDialog;
+  callbacks.on_before_navigation = OnBeforeNavigation;
   callbacks.on_tooltip = OnTooltip;
   callbacks.on_focused_node_changed = OnFocusedNode;
   callbacks.on_ime_composition_bounds = OnImeBounds;
@@ -590,6 +613,8 @@ int main(int argc, const char** argv) {
         g_host.downloadDir = [arg substringFromIndex:16];
       } else if ([arg isEqualToString:@"--dialog-test"]) {
         g_host.dialogTest = YES;
+      } else if ([arg hasPrefix:@"--upload="]) {
+        g_host.uploadPath = [arg substringFromIndex:9];
       } else if ([arg isEqualToString:@"--view-test"]) {
         g_host.viewTest = YES;
       } else if ([arg isEqualToString:@"--input-test"]) {

@@ -123,10 +123,8 @@ class HeadlessContentBrowserClient : public content::ContentBrowserClient {
   void SessionEnding(std::optional<DWORD> control_type) override;
 #endif
 
-#if defined(HEADLESS_USE_POLICY)
   void CreateThrottlesForNavigation(
       content::NavigationThrottleRegistry& registry) override;
-#endif
 
   void OnNetworkServiceCreated(
       ::network::mojom::NetworkService* network_service) override;

@@ -60,6 +60,14 @@ class HEADLESS_EXPORT HeadlessBrowserContextImpl final
   base::FilePath GetPath() const override;
   bool IsOffTheRecord() override;
   content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
+
+  // Sofik: headless has no download delegate of its own (DevTools installs one
+  // on demand), so without this a download started by a page goes nowhere.
+  // Not owned; must outlive the context.
+  void set_download_manager_delegate(
+      content::DownloadManagerDelegate* delegate) {
+    download_manager_delegate_ = delegate;
+  }
   content::BrowserPluginGuestManager* GetGuestManager() override;
   ::storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
   content::PlatformNotificationService* GetPlatformNotificationService()
@@ -110,6 +118,8 @@ class HEADLESS_EXPORT HeadlessBrowserContextImpl final
 
   raw_ptr<HeadlessBrowserImpl> browser_;  // Not owned.
   std::unique_ptr<HeadlessBrowserContextOptions> context_options_;
+  raw_ptr<content::DownloadManagerDelegate> download_manager_delegate_ =
+      nullptr;
   base::FilePath path_;
 
   std::unordered_map<uintptr_t, std::unique_ptr<HeadlessWebContentsImpl>>

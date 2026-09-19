@@ -54,6 +54,8 @@ executable("sofik_engine_probe") {
 # hidden visibility.
 shared_library("sofik_engine") {
   sources = [
+    "downloads.cc",
+    "downloads.h",
     "engine.cc",
     "engine.h",
     "sofik_engine.h",
@@ -68,6 +70,7 @@ shared_library("sofik_engine") {
 
   deps = [
     "//base",
+    "//components/download/public/common:public",
     "//components/input",
     "//components/os_crypt/common:switches",
     "//components/viz/host",

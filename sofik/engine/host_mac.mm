@@ -173,6 +173,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property int shotAfterMs;
 @property BOOL inputTest;
 @property BOOL dialogTest;
+@property(copy) NSString* downloadDir;
 @property int frames;
 @end
 
@@ -235,6 +236,26 @@ static void OnDialog(void*, sofik_view_id view, uint32_t request,
 static void OnPopup(void*, sofik_view_id, const char* url, int gesture) {
   NSLog(@"sofik host: popup requested %s gesture=%d", url, gesture);
 }
+static void OnDownloadRequested(void*, sofik_view_id view, uint32_t request,
+                                const sofik_download* download) {
+  NSLog(@"sofik host: download requested name=[%@] mime=%s total=%lld",
+        @(download->suggested_name), download->mime_type,
+        download->total_bytes);
+  // The name is the page's, so only its last component is used, and only
+  // inside a directory this host chose.
+  NSString* leaf = @(download->suggested_name).lastPathComponent;
+  if (leaf.length == 0 || [leaf hasPrefix:@"."]) leaf = @"download";
+  NSString* path = [g_host.downloadDir stringByAppendingPathComponent:leaf];
+  sofik_view_answer_download(view, request, path.UTF8String);
+}
+static void OnDownloadUpdated(void*, sofik_view_id, const sofik_download* d) {
+  if (d->is_complete || d->is_canceled || d->is_interrupted) {
+    NSLog(@"sofik host: download %u complete=%d canceled=%d interrupted=%d "
+          @"bytes=%lld path=%@",
+          d->id, d->is_complete, d->is_canceled, d->is_interrupted,
+          d->received_bytes, @(d->path));
+  }
+}
 static void OnCdp(void*, sofik_view_id, const char* message) {
   NSString* text = @(message);
   NSLog(@"sofik host: cdp %@",
@@ -289,6 +310,10 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   callbacks.on_loading_state = OnLoading;
   callbacks.on_load_error = OnLoadError;
   callbacks.on_dialog = OnDialog;
+  if (self.downloadDir) {
+    callbacks.on_download_requested = OnDownloadRequested;
+    callbacks.on_download_updated = OnDownloadUpdated;
+  }
   callbacks.on_popup_requested = OnPopup;
 
   sofik_view_config config = {};
@@ -303,6 +328,14 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     return;
   }
   sofik_view_set_focus(g_view, 1);
+
+  if (self.downloadDir) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4000 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+                     [NSApp terminate:nil];
+                   });
+    return;
+  }
 
   if (self.dialogTest) {
     sofik_view_cdp_attach(g_view, OnCdp, nullptr);
@@ -430,6 +463,8 @@ int main(int argc, const char** argv) {
       NSString* arg = @(argv[i]);
       if ([arg hasPrefix:@"--shot="]) {
         g_host.shotPath = [arg substringFromIndex:7];
+      } else if ([arg hasPrefix:@"--download-test="]) {
+        g_host.downloadDir = [arg substringFromIndex:16];
       } else if ([arg isEqualToString:@"--dialog-test"]) {
         g_host.dialogTest = YES;
       } else if ([arg isEqualToString:@"--input-test"]) {

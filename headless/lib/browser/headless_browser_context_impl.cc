@@ -185,7 +185,7 @@ bool HeadlessBrowserContextImpl::IsOffTheRecord() {
 
 content::DownloadManagerDelegate*
 HeadlessBrowserContextImpl::GetDownloadManagerDelegate() {
-  return nullptr;
+  return download_manager_delegate_;
 }
 
 content::BrowserPluginGuestManager*

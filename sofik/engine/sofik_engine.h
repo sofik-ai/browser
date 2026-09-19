@@ -23,10 +23,10 @@
  * Status. macOS only so far. Wired: process and lifecycle, views, GPU and
  * software frames, navigation, mouse, wheel and keyboard, the address, title,
  * favicon, loading, load-error, console and closed events, new-window
- * requests, JavaScript dialogs (alert, confirm, prompt, beforeunload), and the
- * DevTools session. Declared but not delivered yet: cursor, tooltip,
- * focused-node and IME events, file dialogs, permissions and downloads, and
- * the functions that answer them -- calling one of those fails at link time
+ * requests, JavaScript dialogs (alert, confirm, prompt, beforeunload),
+ * downloads, and the DevTools session. Declared but not delivered yet: cursor,
+ * tooltip, focused-node and IME events, file dialogs and permissions, and the
+ * functions that answer them -- calling one of those fails at link time
  * rather than silently doing nothing.
  */
 

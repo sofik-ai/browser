@@ -14,7 +14,10 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/download/public/common/download_item.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/devtools_agent_host.h"
+#include "content/public/browser/download_manager.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
@@ -33,6 +36,7 @@
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "net/base/net_errors.h"
+#include "sofik/engine/downloads.h"
 #include "sofik/engine/engine.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
@@ -160,6 +164,10 @@ View::~View() {
     // Deletes the web contents; nothing may touch it afterwards.
     contents_.ExtractAsDangling()->Close();
   }
+}
+
+content::WebContents* View::web_contents() const {
+  return contents_ ? contents_->web_contents() : nullptr;
 }
 
 content::RenderWidgetHost* View::widget() const {
@@ -654,6 +662,17 @@ void View::CancelDialogs(content::WebContents* web_contents, bool reset_state) {
   }
 }
 
+void View::CancelDownload(uint32_t download) {
+  if (!contents_) {
+    return;
+  }
+  content::DownloadManager* manager =
+      contents_->web_contents()->GetBrowserContext()->GetDownloadManager();
+  if (download::DownloadItem* item = manager->GetDownload(download)) {
+    item->Cancel(/*user_cancel=*/true);
+  }
+}
+
 // ---- DevTools ---------------------------------------------------------------
 
 void View::CdpAttach(sofik_cdp_callback callback, void* user) {
@@ -822,6 +841,19 @@ void sofik_view_answer_dialog(sofik_view_id id, uint32_t request, int accepted,
                               const char* prompt) {
   if (sofik::View* view = Find(id)) {
     view->AnswerDialog(request, accepted != 0, prompt ? prompt : "");
+  }
+}
+
+void sofik_view_answer_download(sofik_view_id id, uint32_t request,
+                                const char* path) {
+  if (sofik::Engine* engine = sofik::Engine::Get()) {
+    engine->downloads().Answer(request, path ? path : "");
+  }
+}
+
+void sofik_view_cancel_download(sofik_view_id id, uint32_t download) {
+  if (sofik::View* view = Find(id)) {
+    view->CancelDownload(download);
   }
 }
 

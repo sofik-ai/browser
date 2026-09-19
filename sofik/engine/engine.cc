@@ -24,6 +24,8 @@
 #include "headless/public/headless_browser.h"
 #include "headless/public/headless_browser_context.h"
 #include "headless/public/switches.h"
+#include "headless/lib/browser/headless_browser_context_impl.h"
+#include "sofik/engine/downloads.h"
 #include "sofik/engine/view.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/display/display_switches.h"
@@ -54,7 +56,7 @@ void AppendIfSet(base::CommandLine& command_line,
 
 }  // namespace
 
-Engine::Engine() = default;
+Engine::Engine() : downloads_(std::make_unique<Downloads>()) {}
 Engine::~Engine() = default;
 
 // static
@@ -205,6 +207,8 @@ headless::HeadlessBrowserContext* Engine::ContextFor(const char* profile) {
             .Append(leaf));
   }
   headless::HeadlessBrowserContext* context = builder.Build();
+  headless::HeadlessBrowserContextImpl::From(context)
+      ->set_download_manager_delegate(downloads_.get());
   contexts_[name] = context;
   return context;
 }
@@ -226,6 +230,18 @@ View* Engine::CreateView(const sofik_view_config& config,
 View* Engine::FindView(sofik_view_id id) const {
   auto found = views_.find(id);
   return found == views_.end() ? nullptr : found->second.get();
+}
+
+View* Engine::FindView(content::WebContents* web_contents) const {
+  if (!web_contents) {
+    return nullptr;
+  }
+  for (const auto& [id, view] : views_) {
+    if (view->web_contents() == web_contents) {
+      return view.get();
+    }
+  }
+  return nullptr;
 }
 
 void Engine::DestroyView(sofik_view_id id) {

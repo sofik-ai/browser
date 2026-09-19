@@ -50,6 +50,9 @@ class View : public content::WebContentsObserver,
   ~View() override;
 
   sofik_view_id id() const { return id_; }
+  const sofik_view_callbacks& callbacks() const { return callbacks_; }
+  void* user() const { return user_; }
+  content::WebContents* web_contents() const;
 
   void Resize(const gfx::Size& size_dips);
   void SetVisible(bool visible);
@@ -72,6 +75,7 @@ class View : public content::WebContentsObserver,
            uint32_t character, uint32_t modifiers);
 
   void AnswerDialog(uint32_t request, bool accepted, const std::string& prompt);
+  void CancelDownload(uint32_t download);
 
   void CdpAttach(sofik_cdp_callback callback, void* user);
   void CdpSend(const std::string& message);

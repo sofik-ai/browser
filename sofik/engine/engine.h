@@ -12,6 +12,7 @@
 
 namespace content {
 class ContentMainRunner;
+class WebContents;
 }
 
 namespace headless {
@@ -22,6 +23,7 @@ class HeadlessContentMainDelegate;
 
 namespace sofik {
 
+class Downloads;
 class View;
 
 // The one browser of the process. Lives on the engine's UI thread, which on
@@ -38,6 +40,8 @@ class Engine {
                    const sofik_view_callbacks& callbacks,
                    void* user);
   View* FindView(sofik_view_id id) const;
+  View* FindView(content::WebContents* web_contents) const;
+  Downloads& downloads() { return *downloads_; }
   void DestroyView(sofik_view_id id);
 
   // One browser context per profile name; nullptr/"" is off the record.
@@ -55,6 +59,8 @@ class Engine {
   std::string cache_root_;
   std::map<std::string, raw_ptr<headless::HeadlessBrowserContext>> contexts_;
   std::map<sofik_view_id, std::unique_ptr<View>> views_;
+  // Outlives every browser context, which hold it unowned.
+  std::unique_ptr<Downloads> downloads_;
   sofik_view_id next_view_id_ = 1;
 };
 

@@ -4,6 +4,12 @@
 
 #include "headless/lib/renderer/headless_content_renderer_client.h"
 
+#include "base/command_line.h"
+#include "headless/lib/renderer/sofik_chrome_object.h"
+#include "headless/public/switches.h"
+#include "third_party/blink/public/web/web_script_controller.h"
+#include "v8/include/v8-extension.h"
+
 #include <memory>
 
 #include "base/check_deref.h"
@@ -102,6 +108,15 @@ HeadlessContentRendererClient::HeadlessContentRendererClient() {
 }
 
 HeadlessContentRendererClient::~HeadlessContentRendererClient() = default;
+
+void HeadlessContentRendererClient::RenderThreadStarted() {
+  // Sofik: a page in Chrome finds window.chrome; see sofik_chrome_object.h.
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kSofikBrowserIdentity)) {
+    blink::WebScriptController::RegisterExtension(
+        sofik_v8::ChromeObjectExtension::Get());
+  }
+}
 
 void HeadlessContentRendererClient::RenderFrameCreated(
     content::RenderFrame* render_frame) {

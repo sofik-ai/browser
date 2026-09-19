@@ -86,6 +86,11 @@ void HeadlessBrowser::UseBrowserIdentity() {
   g_use_browser_identity = true;
 }
 
+// static
+bool HeadlessBrowser::UsesBrowserIdentity() {
+  return g_use_browser_identity;
+}
+
 HeadlessBrowser::Options::Options()
     // Sofik: embedder_support::GetUserAgent() is the string Chrome itself
     // sends, reduced version and all (Chrome/149.0.0.0); building one from a

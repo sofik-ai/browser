@@ -24,6 +24,7 @@ class HeadlessContentRendererClient : public content::ContentRendererClient {
   // content::ContentRendererClient overrides.
   bool IsDecoderSupportedVideoType(const media::VideoType& type) override;
   bool ShouldSuppressAudioTracks() override;
+  void RenderThreadStarted() override;
   void RenderFrameCreated(content::RenderFrame* render_frame) override;
   std::unique_ptr<blink::URLLoaderThrottleProvider>
   CreateURLLoaderThrottleProvider(

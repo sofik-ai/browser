@@ -245,6 +245,8 @@ source_set("headless_renderer") {
   sources = [
     "lib/renderer/allowlist.cc",
     "lib/renderer/allowlist.h",
+    "lib/renderer/sofik_chrome_object.cc",
+    "lib/renderer/sofik_chrome_object.h",
     "lib/renderer/headless_content_renderer_client.cc",
     "lib/renderer/headless_content_renderer_client.h",
   ]
@@ -256,6 +258,7 @@ source_set("headless_renderer") {
     "//third_party/blink/public:blink",
     "//ui/gl",
     "//v8",
+    "//net",
   ]
   public_deps = [
     ":headless_common",

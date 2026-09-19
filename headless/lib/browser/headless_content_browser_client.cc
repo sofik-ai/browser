@@ -269,6 +269,11 @@ void HeadlessContentBrowserClient::GetAdditionalMappedFilesForChildProcess(
 void HeadlessContentBrowserClient::AppendExtraCommandLineSwitches(
     base::CommandLine* command_line,
     int child_process_id) {
+  // Sofik: see switches::kSofikBrowserIdentity.
+  if (HeadlessBrowser::UsesBrowserIdentity()) {
+    command_line->AppendSwitch(switches::kSofikBrowserIdentity);
+  }
+
   // NOTE: We may be called on the UI or IO thread. If called on the IO thread,
   // |browser_| may have already been destroyed.
 

@@ -82,6 +82,7 @@ class HEADLESS_EXPORT HeadlessBrowser {
   // Card both have to say what every other Chrome says. Call before the
   // browser is created.
   static void UseBrowserIdentity();
+  static bool UsesBrowserIdentity();
   static blink::UserAgentMetadata GetUserAgentMetadata();
 
  protected:

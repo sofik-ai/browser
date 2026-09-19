@@ -122,6 +122,11 @@ inline constexpr char kScreenInfo[] = "screen-info";
 // A string used to override the default user agent with a custom one.
 inline constexpr char kUserAgent[] = "user-agent";
 
+// Sofik: tells a renderer the browser presents itself as Chrome rather than
+// as HeadlessChrome, so it installs the window.chrome object. Set by the
+// browser process for its children; never by hand.
+inline constexpr char kSofikBrowserIdentity[] = "sofik-browser-identity";
+
 // Directory where the browser stores the user profile. Note that if this switch
 // is added, the session will no longer be Incognito, unless Incognito mode is
 // forced with --incognito switch.

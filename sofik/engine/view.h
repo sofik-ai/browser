@@ -10,6 +10,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/process/kill.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/javascript_dialog_manager.h"
@@ -110,6 +111,8 @@ class View : public content::WebContentsObserver,
 
   // content::WebContentsObserver:
   void RenderViewReady() override;
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override;
   void RenderViewHostChanged(content::RenderViewHost* old_host,
                              content::RenderViewHost* new_host) override;
   void DidStartLoading() override;

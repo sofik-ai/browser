@@ -127,6 +127,11 @@ inline constexpr char kUserAgent[] = "user-agent";
 // browser process for its children; never by hand.
 inline constexpr char kSofikBrowserIdentity[] = "sofik-browser-identity";
 
+// Sofik: where an embedded engine keeps icudtl.dat, the .pak files and the V8
+// snapshots, when that is not next to its library. Set by the browser process
+// for its children; never by hand.
+inline constexpr char kSofikResourcesDir[] = "sofik-resources-dir";
+
 // Directory where the browser stores the user profile. Note that if this switch
 // is added, the session will no longer be Incognito, unless Incognito mode is
 // forced with --incognito switch.

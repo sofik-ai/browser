@@ -66,7 +66,9 @@ SOFIK_EXPORT int sofik_engine_run_child_process(int argc, const char** argv);
 typedef struct sofik_settings {
   uint32_t abi;                 /* SOFIK_ENGINE_ABI */
   const char* helper_path;      /* executable that calls run_child_process */
-  const char* resources_dir;    /* .pak files, icudtl.dat, snapshot blobs */
+  /* icudtl.dat, the .pak files and the V8 snapshots. NULL: the directory of
+   * the engine's library, which is where a distribution puts them. */
+  const char* resources_dir;
   const char* cache_root;       /* profiles live under it */
   const char* locale;           /* UI locale, e.g. "pt-BR" */
   const char* accept_languages; /* "pt-BR,pt,en-US,en" */

@@ -15,7 +15,8 @@
 #import <IOSurface/IOSurface.h>
 #import <QuartzCore/QuartzCore.h>
 
-#include <mach-o/dyld.h>
+#include <dlfcn.h>
+#include <unistd.h>
 
 #include <string>
 
@@ -178,6 +179,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property BOOL dialogTest;
 @property BOOL viewTest;
 @property BOOL nativeView;
+@property(copy) NSString* switches;
 @property(copy) NSString* uploadPath;
 @property(copy) NSString* downloadDir;
 @property(copy) NSString* evalExpression;
@@ -343,13 +345,18 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   [self.window makeFirstResponder:self.page];
   [NSApp activateIgnoringOtherApps:YES];
 
-  // The helper sits next to this executable.
-  char path[4096];
-  uint32_t size = sizeof(path);
-  _NSGetExecutablePath(path, &size);
-  std::string helper =
-      std::string(path).substr(0, std::string(path).rfind('/')) +
-      "/sofik_engine_helper";
+  // The helper ships next to the engine's library, wherever the host put it.
+  Dl_info engine = {};
+  dladdr(reinterpret_cast<const void*>(&sofik_engine_initialize), &engine);
+  std::string library = engine.dli_fname ? engine.dli_fname : "";
+  std::string engine_dir = library.substr(0, library.rfind('/'));
+  // As package_mac.py lays it out, or bare in a build directory.
+  std::string helper = engine_dir +
+                       "/Helpers/Sofik Engine Helper.app/Contents/MacOS/"
+                       "Sofik Engine Helper";
+  if (access(helper.c_str(), X_OK) != 0) {
+    helper = engine_dir + "/sofik_engine_helper";
+  }
 
   sofik_settings settings = {};
   settings.abi = SOFIK_ENGINE_ABI;
@@ -357,6 +364,7 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   settings.accept_languages = "pt-BR,pt,en-US,en";
   settings.locale = "pt-BR";
   settings.device_scale_factor = self.window.backingScaleFactor;
+  settings.extra_switches = self.switches.UTF8String;
   int result = sofik_engine_initialize(&settings);
   if (result != 0) {
     NSLog(@"sofik host: the engine did not start (%d)", result);
@@ -636,6 +644,8 @@ int main(int argc, const char** argv) {
         g_host.dialogTest = YES;
       } else if ([arg hasPrefix:@"--upload="]) {
         g_host.uploadPath = [arg substringFromIndex:9];
+      } else if ([arg hasPrefix:@"--switches="]) {
+        g_host.switches = [arg substringFromIndex:11];
       } else if ([arg isEqualToString:@"--native-view"]) {
         g_host.nativeView = YES;
       } else if ([arg isEqualToString:@"--view-test"]) {

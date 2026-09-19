@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/path_service.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -32,6 +33,7 @@
 #include "ui/gl/gl_switches.h"
 
 #if BUILDFLAG(IS_MAC)
+#include "base/apple/bundle_locations.h"
 #include "sandbox/mac/seatbelt_exec.h"
 #endif
 
@@ -44,6 +46,27 @@ Engine* g_engine = nullptr;
 std::vector<std::string>& ArgvStorage() {
   static base::NoDestructor<std::vector<std::string>> storage;
   return *storage;
+}
+
+// icudtl.dat, the .pak files and the V8 snapshots. The content layer looks for
+// them next to the *executable*, which for an embedded engine is the host
+// application -- somebody else's bundle. They ship with the engine, so the
+// default is next to the engine's library, in every process.
+void PointAssetsAtTheEngine() {
+  const base::CommandLine& command_line =
+      *base::CommandLine::ForCurrentProcess();
+  base::FilePath assets =
+      command_line.GetSwitchValuePath(headless::switches::kSofikResourcesDir);
+  if (assets.empty() && !base::PathService::Get(base::DIR_MODULE, &assets)) {
+    return;
+  }
+  base::PathService::Override(base::DIR_ASSETS, assets);
+#if BUILDFLAG(IS_MAC)
+  // On macOS ICU and V8 do not ask for DIR_ASSETS: they ask the "framework
+  // bundle", which is the main bundle unless told otherwise. A plain
+  // directory serves as one.
+  base::apple::SetOverrideFrameworkBundlePath(assets);
+#endif
 }
 
 void AppendIfSet(base::CommandLine& command_line,
@@ -88,6 +111,9 @@ int Engine::Initialize(const sofik_settings& settings) {
 
   AppendIfSet(command_line, ::switches::kBrowserSubprocessPath,
               settings.helper_path);
+  AppendIfSet(command_line, headless::switches::kSofikResourcesDir,
+              settings.resources_dir);
+  PointAssetsAtTheEngine();
   AppendIfSet(command_line, headless::switches::kUserDataDir,
               settings.cache_root);
   AppendIfSet(command_line, ::switches::kLang, settings.locale);
@@ -259,6 +285,7 @@ int sofik_engine_run_child_process(int argc, const char** argv) {
           ::switches::kProcessType)) {
     return -1;
   }
+  sofik::PointAssetsAtTheEngine();
   content::ContentMainParams params(nullptr);
   params.argc = argc;
   params.argv = argv;

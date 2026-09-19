@@ -287,6 +287,12 @@ void HeadlessContentBrowserClient::AppendExtraCommandLineSwitches(
   if (HeadlessBrowser::UsesBrowserIdentity()) {
     command_line->AppendSwitch(switches::kSofikBrowserIdentity);
   }
+  const base::CommandLine& own = *base::CommandLine::ForCurrentProcess();
+  if (own.HasSwitch(switches::kSofikResourcesDir)) {
+    command_line->AppendSwitchPath(
+        switches::kSofikResourcesDir,
+        own.GetSwitchValuePath(switches::kSofikResourcesDir));
+  }
 
   // NOTE: We may be called on the UI or IO thread. If called on the IO thread,
   // |browser_| may have already been destroyed.

@@ -534,6 +534,13 @@ void View::RenderViewReady() {
   }
 }
 
+void View::PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) {
+  // Said out loud: a renderer that dies leaves a blank card and, without
+  // this, no trace of why.
+  LOG(ERROR) << "sofik: the renderer of view " << id_
+             << " is gone, termination status " << static_cast<int>(status);
+}
+
 void View::RenderViewHostChanged(content::RenderViewHost* old_host,
                                  content::RenderViewHost* new_host) {
   StartCapture();

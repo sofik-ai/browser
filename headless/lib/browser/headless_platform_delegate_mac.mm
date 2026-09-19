@@ -57,7 +57,11 @@ void HeadlessPlatformDelegate::Initialize(
     display::Screen::SetScreenInstance(screen);
   }
 
-  content::DontShowPopupMenus();
+  // Sofik: an embedded page may be in a real window (the engine's native-view
+  // mode), where a <select> opens its menu like anywhere else.
+  if (!HeadlessBrowser::UsesBrowserIdentity()) {
+    content::DontShowPopupMenus();
+  }
 }
 
 void HeadlessPlatformDelegate::Start() {
@@ -98,7 +102,10 @@ void HeadlessPlatformDelegate::SetWebContentsBounds(
             if (content_web_contents) {
               content::RenderWidgetHostView* host_view =
                   content_web_contents->GetRenderWidgetHostView();
-              if (host_view) {
+              // Sofik: an embedder may have put the view in a window of its
+              // own by now, and then the window's frame is the real one.
+              if (host_view &&
+                  !host_view->GetNativeView().GetNativeNSView().window) {
                 host_view->SetWindowFrameInScreen(bounds);
               }
             }

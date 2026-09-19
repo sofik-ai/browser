@@ -220,12 +220,29 @@ typedef struct sofik_view_config {
   /* Pixels per DIP of this view: the density of whatever the host composites
    * the texture onto. 0 takes sofik_settings.device_scale_factor. */
   float device_scale_factor;
+  /* Non-zero: a native view instead of frames (macOS only so far). The page
+   * is drawn by the window server inside a view the host places in its own
+   * window -- see sofik_view_native_handle. Sharp at any zoom of whatever is
+   * around it, which a resampled texture never is, at the price of being a
+   * rectangle on top of the host's content rather than part of it. The
+   * platform then delivers the person's mouse, keyboard, input method, cursor,
+   * tooltips and <select> menus by itself: on_frame, on_cursor, on_tooltip and
+   * the IME callbacks stay silent, and the sofik_view_mouse_*, _key, _ime_*,
+   * _resize and _set_scale functions do nothing. An agent drives the page
+   * through DevTools in both modes. */
+  int native_view;
 } sofik_view_config;
 
 SOFIK_EXPORT sofik_view_id sofik_view_create(const sofik_view_config*,
                                              const sofik_view_callbacks*,
                                              void* user);
 SOFIK_EXPORT void sofik_view_close(sofik_view_id);
+
+/* For a view created with native_view: the NSView* (macOS) to add to the
+ * host's window and to size like any other. The engine owns it; it is gone
+ * after sofik_view_close or on_closed, and so has to be removed from its
+ * superview before either. NULL for a view that delivers frames. */
+SOFIK_EXPORT void* sofik_view_native_handle(sofik_view_id);
 
 SOFIK_EXPORT void sofik_view_resize(sofik_view_id, int width, int height);
 /* The window moved to a monitor of another density. */

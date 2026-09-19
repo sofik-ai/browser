@@ -67,8 +67,14 @@ shared_library("sofik_engine") {
     "view.h",
   ]
   if (is_mac) {
-    sources += [ "host_loop_pump_mac.mm" ]
-    frameworks = [ "CoreFoundation.framework" ]
+    sources += [
+      "host_loop_pump_mac.mm",
+      "view_mac.mm",
+    ]
+    frameworks = [
+      "Cocoa.framework",
+      "CoreFoundation.framework",
+    ]
   }
   defines = [ "SOFIK_ENGINE_IMPLEMENTATION" ]
 

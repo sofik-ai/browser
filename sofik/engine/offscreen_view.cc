@@ -283,7 +283,18 @@ gfx::Rect OffscreenView::GetViewBounds() {
 }
 
 gfx::Rect OffscreenView::GetBoundsInRootWindow() {
-  return parent_ ? parent_->GetBoundsInRootWindow() : bounds_;
+  if (parent_) {
+    return parent_->GetBoundsInRootWindow();
+  }
+  // The window a page believes it is in. A page whose outerHeight equals its
+  // innerHeight is in a window with no title bar, no tabs and no toolbar --
+  // that is, in no browser anyone uses -- and it takes one comparison to see.
+  // The card is inside a real window; this gives the page the shape of
+  // Chrome's: about 52px of tab strip and 35px of toolbar above the content.
+  constexpr int kBrowserChromeHeight = 87;
+  gfx::Rect window = bounds_;
+  window.set_height(window.height() + kBrowserChromeHeight);
+  return window;
 }
 
 gfx::Size OffscreenView::GetCompositorViewportPixelSize() {

@@ -56,6 +56,8 @@ class View : public content::WebContentsObserver,
   const sofik_view_callbacks& callbacks() const { return callbacks_; }
   void* user() const { return user_; }
   content::WebContents* web_contents() const;
+  // Null unless the view was created with `native_view`.
+  void* NativeHandle() const;
 
   void Resize(const gfx::Size& size_dips);
   void SetScale(float scale);
@@ -185,7 +187,8 @@ class View : public content::WebContentsObserver,
 
   const sofik_view_id id_;
   raw_ptr<headless::HeadlessWebContentsImpl> contents_;
-  // Owned by the web contents, so gone with it.
+  // Owned by the web contents, so gone with it. Null for a native view, whose
+  // widgets are the platform's.
   raw_ptr<OffscreenContentsView> contents_view_;
   const sofik_view_callbacks callbacks_;
   const raw_ptr<void> user_;

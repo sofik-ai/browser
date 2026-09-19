@@ -8,6 +8,7 @@
 //   sofik_engine_host [--shot=/path.png --after-ms=4000] <url>
 //   sofik_engine_host --input-test <url of a page with a report() function>
 //   sofik_engine_host --view-test [--shot=PNG] <url of test/view_test.html>
+//   sofik_engine_host --native-view ...   the page in an NSView, not a texture
 //   sofik_engine_host --dialog-test --upload=FILE <url of test/upload_test.html>
 
 #import <Cocoa/Cocoa.h>
@@ -176,6 +177,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property BOOL inputTest;
 @property BOOL dialogTest;
 @property BOOL viewTest;
+@property BOOL nativeView;
 @property(copy) NSString* uploadPath;
 @property(copy) NSString* downloadDir;
 @property(copy) NSString* evalExpression;
@@ -388,6 +390,7 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   config.height = frame.size.height;
   config.prefer_gpu_frames = 1;
   config.device_scale_factor = self.window.backingScaleFactor;
+  config.native_view = self.nativeView;
   g_view = sofik_view_create(&config, &callbacks, nullptr);
   if (!g_view) {
     NSLog(@"sofik host: could not create the view");
@@ -395,6 +398,21 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     return;
   }
   sofik_view_set_focus(g_view, 1);
+
+  if (self.nativeView) {
+    // The engine's own NSView, in this window like any other view: the window
+    // server draws the page, and AppKit hands it the mouse and the keyboard.
+    NSView* native = (__bridge NSView*)sofik_view_native_handle(g_view);
+    if (!native) {
+      NSLog(@"sofik host: no native view");
+      [NSApp terminate:nil];
+      return;
+    }
+    native.frame = self.page.bounds;
+    native.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [self.page addSubview:native];
+    [self.window makeFirstResponder:native];
+  }
 
   if (self.evalExpression) {
     // Runs one expression in the page over DevTools and prints the reply.
@@ -589,6 +607,9 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
 }
 
 - (void)applicationWillTerminate:(NSNotification*)notification {
+  if (g_view && self.nativeView) {
+    [(__bridge NSView*)sofik_view_native_handle(g_view) removeFromSuperview];
+  }
   if (g_view) {
     sofik_view_close(g_view);
     g_view = 0;
@@ -615,6 +636,8 @@ int main(int argc, const char** argv) {
         g_host.dialogTest = YES;
       } else if ([arg hasPrefix:@"--upload="]) {
         g_host.uploadPath = [arg substringFromIndex:9];
+      } else if ([arg isEqualToString:@"--native-view"]) {
+        g_host.nativeView = YES;
       } else if ([arg isEqualToString:@"--view-test"]) {
         g_host.viewTest = YES;
       } else if ([arg isEqualToString:@"--input-test"]) {

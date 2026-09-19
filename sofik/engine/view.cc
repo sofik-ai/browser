@@ -135,32 +135,35 @@ std::unique_ptr<View> View::Create(sofik_view_id id,
   // makes it has to be in place before: it goes in with the parameters the
   // web contents is created from.
   OffscreenContentsView* contents_view = nullptr;
-  headless::HeadlessWebContents* contents =
-      context->CreateWebContentsBuilder()
-          .SetInitialURL(url)
-          .SetWindowBounds(gfx::Rect(size))
-          .SetCreateParamsCallback(base::BindOnce(
-              [](OffscreenContentsView** out, const gfx::Size& size,
-                 float scale, int frame_rate,
-                 content::WebContents::CreateParams* params) {
-                *out = OffscreenContentsView::Install(params, size, scale,
-                                                      frame_rate);
-              },
-              &contents_view, size, config.device_scale_factor, frame_rate))
-          .Build();
+  headless::HeadlessWebContents::Builder builder =
+      context->CreateWebContentsBuilder();
+  builder.SetInitialURL(url).SetWindowBounds(gfx::Rect(size));
+  const bool native_view = config.native_view != 0;
+  if (!native_view) {
+    builder.SetCreateParamsCallback(base::BindOnce(
+        [](OffscreenContentsView** out, const gfx::Size& size, float scale,
+           int frame_rate, content::WebContents::CreateParams* params) {
+          *out =
+              OffscreenContentsView::Install(params, size, scale, frame_rate);
+        },
+        &contents_view, size, config.device_scale_factor, frame_rate));
+  }
+  headless::HeadlessWebContents* contents = builder.Build();
   if (!contents) {
     LOG(ERROR) << "sofik: could not create a view for " << url;
     return nullptr;
   }
-  CHECK(contents_view);
+  CHECK(native_view || contents_view);
   auto* contents_impl = headless::HeadlessWebContentsImpl::From(contents);
-  contents_view->set_web_contents(contents_impl->web_contents());
   auto view = base::WrapUnique(
       new View(id, contents_impl, contents_view, config, callbacks, user));
-  contents_view->set_delegate(view.get());
   view->size_dips_ = size;
   view->contents_->set_embedder_delegate(view.get());
-  view->StartCapture();
+  if (contents_view) {
+    contents_view->set_web_contents(contents_impl->web_contents());
+    contents_view->set_delegate(view.get());
+    view->StartCapture();
+  }
   return view;
 }
 
@@ -192,7 +195,9 @@ View::~View() {
   file_requests_.clear();
   if (contents_) {
     contents_->set_embedder_delegate(nullptr);
-    contents_view_->set_delegate(nullptr);
+    if (contents_view_) {
+      contents_view_->set_delegate(nullptr);
+    }
   }
   contents_view_ = nullptr;
   CdpDetach();
@@ -209,8 +214,15 @@ content::WebContents* View::web_contents() const {
   return contents_ ? contents_->web_contents() : nullptr;
 }
 
+#if !BUILDFLAG(IS_MAC)
+void* View::NativeHandle() const {
+  return nullptr;  // The native-view mode is macOS only so far.
+}
+#endif
+
 OffscreenView* View::page_view() const {
-  if (!contents_ || !contents_->web_contents()->GetRenderWidgetHostView()) {
+  if (!contents_ || !contents_view_ ||
+      !contents_->web_contents()->GetRenderWidgetHostView()) {
     return nullptr;
   }
   return contents_view_->GetView();
@@ -219,8 +231,8 @@ OffscreenView* View::page_view() const {
 // ---- frames -----------------------------------------------------------------
 
 void View::StartCapture() {
-  if (!contents_) {
-    return;
+  if (!contents_ || !contents_view_) {
+    return;  // A native view is shown by the window server, not by the host.
   }
   content::RenderWidgetHostView* view =
       contents_->web_contents()->GetRenderWidgetHostView();
@@ -321,7 +333,8 @@ void View::OnFrameCaptured(
 }
 
 void View::Resize(const gfx::Size& size_dips) {
-  if (!contents_ || size_dips.IsEmpty() || size_dips == size_dips_) {
+  if (!contents_ || !contents_view_ || size_dips.IsEmpty() ||
+      size_dips == size_dips_) {
     return;
   }
   size_dips_ = size_dips;
@@ -334,7 +347,7 @@ void View::Resize(const gfx::Size& size_dips) {
 }
 
 void View::SetScale(float scale) {
-  if (!contents_ || scale <= 0) {
+  if (!contents_ || !contents_view_ || scale <= 0) {
     return;
   }
   contents_view_->SetScale(scale);
@@ -1087,6 +1100,11 @@ sofik_view_id sofik_view_create(const sofik_view_config* config,
   sofik::View* view =
       engine->CreateView(*config, callbacks ? *callbacks : none, user);
   return view ? view->id() : 0;
+}
+
+void* sofik_view_native_handle(sofik_view_id id) {
+  sofik::View* view = Find(id);
+  return view ? view->NativeHandle() : nullptr;
 }
 
 void sofik_view_close(sofik_view_id id) {

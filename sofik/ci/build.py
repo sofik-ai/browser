@@ -472,19 +472,40 @@ def missing_inputs(config: str, env) -> list[str]:
     and what a configuration generated slightly differently reads, was in
     nobody's list. A build finds such a file the hard way -- the scheduler
     stops at the first one, the stage fails, and the next run finds the second.
-    A dry run with -k 0 walks the whole graph without compiling anything and
-    names them all at once, in about a minute.
+    (A dry run does no better: -n -k 0 still stops at the first.)
+
+    `siso query inputs` prints every declared input of the targets without
+    building anything, which is how the prune lists were made in the first
+    place; whatever it names that is neither in the tree nor something the
+    build itself produces is missing, and all of them come out at once.
     """
-    import re
+    directory = out_dir(config)
     targets = ninja_command(config)[5:]
-    command = ["siso", "ninja", "-C", out_dir(config), "-n", "-offline",
-               "-k", "0", *targets]
+    command = ["siso", "query", "inputs", "-C", directory, *targets]
     result = subprocess.run(
         " ".join(command) if IS_WINDOWS else command, cwd=str(SRC), env=env,
         shell=IS_WINDOWS, capture_output=True, text=True, errors="replace")
-    found = re.findall(r'"([^"]+)", needed by', result.stdout + result.stderr)
-    return sorted({os.path.normpath(os.path.join(out_dir(config), path))
-                   .replace(os.sep, "/") for path in found})
+    if result.returncode != 0:
+        print(f"--> siso query inputs failed ({result.returncode}); "
+              "skipping the check", flush=True)
+        print(result.stderr[-2000:], flush=True)
+        return []
+    out_root = (SRC / directory).resolve()
+    missing = set()
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        path = (out_root / line).resolve()
+        # Inside the output directory: generated, not there yet, not missing.
+        if out_root == path or out_root in path.parents:
+            continue
+        if not path.exists():
+            try:
+                missing.add(path.relative_to(SRC.resolve()).as_posix())
+            except ValueError:
+                missing.add(str(path))
+    return sorted(missing)
 
 
 def run_with_deadline(command: list[str], cwd: Path, env, seconds: int) -> int | None:

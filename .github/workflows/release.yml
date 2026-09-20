@@ -53,6 +53,11 @@ on:
         required: false
         default: false
         type: boolean
+      platforms:
+        description: which platforms to build, comma separated
+        required: false
+        default: linux64,windows64,macosarm64
+        type: string
       linux_runner:
         required: false
         default: ubuntu-24.04
@@ -72,7 +77,12 @@ on:
       - main
 
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
+  # A push supersedes the push before it: the newer source is the one worth
+  # building, and the stages already finished have saved their cache. A run
+  # started by hand is its own group, so that one platform can be retried
+  # while the others are hours into a compile a cancellation would throw away
+  # (the cache is saved at the end of a stage, not during it).
+  group: release-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -114,16 +124,25 @@ jobs:
           LINUX: ${{ inputs.linux_runner || 'ubuntu-24.04' }}
           WINDOWS: ${{ inputs.windows_runner || 'windows-2025' }}
           MACOS: ${{ inputs.macos_runner || 'macos-15' }}
+          PLATFORMS: ${{ inputs.platforms || 'linux64,windows64,macosarm64' }}
           STAGES: ${{ inputs.stages || 4 }}
           DEADLINE: ${{ inputs.deadline || 315 }}
           SCCACHE_SIZE: ${{ inputs.sccache_size || '6G' }}
           CARRY_OUT_DIR: ${{ inputs.carry_out_dir || false }}
         run: |
           {
-            printf 'matrix={"include":['
-            printf '{"platform":"linux64","runner":"%s"},' "$LINUX"
-            printf '{"platform":"windows64","runner":"%s"},' "$WINDOWS"
-            printf '{"platform":"macosarm64","runner":"%s"}]}\n' "$MACOS"
+            python - <<'PY'
+          import json, os
+          runners = {"linux64": os.environ["LINUX"],
+                     "windows64": os.environ["WINDOWS"],
+                     "macosarm64": os.environ["MACOS"]}
+          wanted = [p.strip() for p in os.environ["PLATFORMS"].split(",") if p.strip()]
+          unknown = [p for p in wanted if p not in runners]
+          if unknown or not wanted:
+              raise SystemExit(f"platforms: expected some of {list(runners)}, got {wanted}")
+          print("matrix=" + json.dumps({"include": [
+              {"platform": p, "runner": runners[p]} for p in wanted]}))
+          PY
             echo "stages=$STAGES"
             echo "deadline=$DEADLINE"
             echo "sccache_size=$SCCACHE_SIZE"

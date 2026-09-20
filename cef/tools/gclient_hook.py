@@ -33,9 +33,13 @@ print("\nGenerating CEF translated files...")
 cmd = [sys.executable, 'tools/version_manager.py', '-u', '--fast-check']
 RunAction(cef_dir, cmd)
 
-print("\nPatching build configuration and source files for CEF...")
-cmd = [sys.executable, 'tools/patcher.py']
-RunAction(cef_dir, cmd)
+# Sofik: no patching. Upstream CEF is a set of patches laid over a Chromium it
+# fetches, re-applied on every generation and skipped when already there. This
+# tree is neither fetched nor re-synced: the patches were applied once and are
+# its source now, edited further and pruned since. Re-applying them can only
+# fail -- one targets a file the prune removed, another patches gclient, which
+# nothing here runs -- and a failure stops the build over a change that is
+# already in it.
 
 if platform == 'linux' and 'CEF_INSTALL_SYSROOT' in os.environ:
   for arch in os.environ['CEF_INSTALL_SYSROOT'].split(','):

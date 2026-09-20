@@ -8,6 +8,7 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
@@ -50,22 +51,36 @@ std::vector<std::string>& ArgvStorage() {
 
 // icudtl.dat, the .pak files and the V8 snapshots. The content layer looks for
 // them next to the *executable*, which for an embedded engine is the host
-// application -- somebody else's bundle. They ship with the engine, so the
-// default is next to the engine's library, in every process.
+// application -- somebody else's bundle. They ship with the engine, so by
+// default they are found from the engine's own library, in every process:
+// beside it in a build directory, or in Resources/ when the library is the
+// binary of SofikEngine.framework (see package_mac.py).
 void PointAssetsAtTheEngine() {
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
   base::FilePath assets =
       command_line.GetSwitchValuePath(headless::switches::kSofikResourcesDir);
-  if (assets.empty() && !base::PathService::Get(base::DIR_MODULE, &assets)) {
-    return;
+  base::FilePath bundle;
+  if (assets.empty()) {
+    base::FilePath library_dir;
+    if (!base::PathService::Get(base::DIR_MODULE, &library_dir)) {
+      return;
+    }
+    assets = library_dir;
+    // <name>.framework/Versions/A/<library>
+    const base::FilePath framework = library_dir.DirName().DirName();
+    if (framework.MatchesExtension(FILE_PATH_LITERAL(".framework")) &&
+        base::PathExists(library_dir.Append(FILE_PATH_LITERAL("Resources")))) {
+      assets = library_dir.Append(FILE_PATH_LITERAL("Resources"));
+      bundle = framework;
+    }
   }
   base::PathService::Override(base::DIR_ASSETS, assets);
 #if BUILDFLAG(IS_MAC)
   // On macOS ICU and V8 do not ask for DIR_ASSETS: they ask the "framework
-  // bundle", which is the main bundle unless told otherwise. A plain
-  // directory serves as one.
-  base::apple::SetOverrideFrameworkBundlePath(assets);
+  // bundle", which is the main bundle unless told otherwise, and a bundled GPU
+  // process loads ANGLE from its Libraries/. A plain directory serves as one.
+  base::apple::SetOverrideFrameworkBundlePath(bundle.empty() ? assets : bundle);
 #endif
 }
 

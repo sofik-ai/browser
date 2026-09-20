@@ -156,13 +156,13 @@ if (is_mac) {
     deps = [ ":sofik_engine" ]
 
     # Beside the engine, as in the build directory, or as an application
-    # bundle with the engine in Contents/Frameworks/sofik_engine -- which is
+    # bundle with SofikEngine.framework in Contents/Frameworks -- which is
     # where it has to be: the sandbox lets a child process read the main
     # bundle and nothing else, so an engine outside it cannot load its own
     # resources.
     ldflags = [
       "-Wl,-rpath,@loader_path",
-      "-Wl,-rpath,@loader_path/../Frameworks/sofik_engine",
+      "-Wl,-rpath,@loader_path/../Frameworks/SofikEngine.framework/Versions/A",
     ]
     data_deps = [ ":sofik_engine_helper" ]
     frameworks = [

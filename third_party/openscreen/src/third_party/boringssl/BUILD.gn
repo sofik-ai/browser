@@ -1,0 +1,69 @@
+# Copyright 2019 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build_overrides/build.gni")
+
+if (build_with_chromium) {
+  group("boringssl") {
+    public_configs = [ "//build/config/compiler:default_include_dirs" ]
+    public_deps = [ "//third_party/boringssl" ]
+  }
+} else {
+  import("src/gen/sources.gni")
+
+  # Config for us and everybody else depending on BoringSSL.
+  config("external_config") {
+    include_dirs = [ "src/include" ]
+    cflags = []
+  }
+
+  # Config internal to this build file, shared by boringssl and boringssl_fuzzer.
+  config("internal_config") {
+    visibility = [ ":*" ]  # Only targets in this file can depend on this.
+    defines = [
+      "BORINGSSL_IMPLEMENTATION",
+      "OPENSSL_SMALL",
+    ]
+
+    cflags = [ "-w" ]  # Disable all warnings.
+  }
+
+  config("no_asm_config") {
+    visibility = [ ":*" ]  # Only targets in this file can depend on this.
+    defines = [ "OPENSSL_NO_ASM" ]
+  }
+
+  # This has no sources on some platforms so must be a source_set.
+  source_set("boringssl_asm") {
+    visibility = [ ":*" ]  # Only targets in this file can depend on this.
+
+    if (current_os == "win" && (current_cpu == "x86" || current_cpu == "x64")) {
+      # Windows' x86 and x86_64 assembly is built with NASM, which is not
+      # supported by this build.
+      public_configs = [ ":no_asm_config" ]
+    } else {
+      # All other targets use GAS-compatible assembler. BoringSSL's assembly
+      # files are all wrapped in processor checks for the corresponding target,
+      # so there is no need to add target conditions in the build.
+      sources = rebase_path(bcm_sources_asm + crypto_sources_asm, ".", "src")
+      include_dirs = [ "src/include" ]
+    }
+  }
+
+  source_set("boringssl") {
+    sources = rebase_path(
+            bcm_internal_headers + bcm_sources + crypto_internal_headers +
+                crypto_sources + ssl_internal_headers + ssl_sources,
+            ".",
+            "src")
+    public = rebase_path(crypto_headers + ssl_headers, ".", "src")
+    deps = [
+      ":boringssl_asm",
+      "src/third_party/fiat:fiat_license",
+    ]
+
+    public_configs = [ ":external_config" ]
+    configs += [ ":internal_config" ]
+  }
+}

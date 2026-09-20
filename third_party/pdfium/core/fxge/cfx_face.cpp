@@ -1,0 +1,1025 @@
+// Copyright 2019 The PDFium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "core/fxge/cfx_face.h"
+
+#include <algorithm>
+#include <array>
+#include <limits>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/compiler_specific.h"
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/numerics/clamped_math.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
+#include "core/fxcrt/numerics/safe_math.h"
+#include "core/fxcrt/unowned_ptr.h"
+#include "core/fxge/cfx_fontmgr.h"
+#include "core/fxge/cfx_gemodule.h"
+#include "core/fxge/cfx_glyphbitmap.h"
+#include "core/fxge/cfx_glyphcache.h"
+#include "core/fxge/cfx_path.h"
+#include "core/fxge/cfx_substfont.h"
+#include "core/fxge/dib/cfx_dibitmap.h"
+#include "core/fxge/dib/fx_dib.h"
+#include "core/fxge/fx_font.h"
+#include "core/fxge/fx_fontencoding.h"
+
+#if defined(PDF_USE_SKIA)
+#include "third_party/skia/include/core/SkTypeface.h"  // nogncheck
+
+// Define the following to enable additional runtime checks during
+// the development process.
+// #define PDF_ENABLE_SKIA_TYPEFACE_CHECKS 1
+#endif
+
+#define EM_ADJUST(em, a) (em == 0 ? (a) : (a) * 1000 / em)
+
+namespace {
+
+struct OUTLINE_PARAMS {
+  UnownedPtr<CFX_Path> path_;
+  FT_Pos cur_x_;
+  FT_Pos cur_y_;
+};
+
+constexpr float kCoordUnit = 64 * 64.0f;
+constexpr int kThousandthMinInt = std::numeric_limits<int>::min() / 1000;
+constexpr int kThousandthMaxInt = std::numeric_limits<int>::max() / 1000;
+
+constexpr int kMaxGlyphDimension = 2048;
+
+// Boundary value to avoid integer overflow when adding 1/64th of the value.
+constexpr int kMaxRectTop = 2114445437;
+
+constexpr auto kWeightPow = std::to_array<const uint8_t>({
+    0,   6,   12,  14,  16,  18,  22,  24,  28,  30,  32,  34,  36,  38,  40,
+    42,  44,  46,  48,  50,  52,  54,  56,  58,  60,  62,  64,  66,  68,  70,
+    70,  72,  72,  74,  74,  74,  76,  76,  76,  78,  78,  78,  80,  80,  80,
+    82,  82,  82,  84,  84,  84,  84,  86,  86,  86,  88,  88,  88,  88,  90,
+    90,  90,  90,  92,  92,  92,  92,  94,  94,  94,  94,  96,  96,  96,  96,
+    96,  98,  98,  98,  98,  100, 100, 100, 100, 100, 102, 102, 102, 102, 102,
+    104, 104, 104, 104, 104, 106, 106, 106, 106, 106,
+});
+
+constexpr auto kWeightPow11 = std::to_array<const uint8_t>({
+    0,  4,  7,  8,  9,  10, 12, 13, 15, 17, 18, 19, 20, 21, 22, 23, 24,
+    25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 39, 39, 40, 40, 41,
+    41, 41, 42, 42, 42, 43, 43, 43, 44, 44, 44, 45, 45, 45, 46, 46, 46,
+    46, 43, 47, 47, 48, 48, 48, 48, 45, 50, 50, 50, 46, 51, 51, 51, 52,
+    52, 52, 52, 53, 53, 53, 53, 53, 54, 54, 54, 54, 55, 55, 55, 55, 55,
+    56, 56, 56, 56, 56, 57, 57, 57, 57, 57, 58, 58, 58, 58, 58,
+});
+
+constexpr auto kWeightPowShiftJis = std::to_array<const uint8_t>({
+    0,   0,   2,   4,   6,   8,   10,  14,  16,  20,  22,  26,  28,  32,  34,
+    38,  42,  44,  48,  52,  56,  60,  64,  66,  70,  74,  78,  82,  86,  90,
+    96,  96,  96,  96,  98,  98,  98,  100, 100, 100, 100, 102, 102, 102, 102,
+    104, 104, 104, 104, 104, 106, 106, 106, 106, 106, 108, 108, 108, 108, 108,
+    110, 110, 110, 110, 110, 112, 112, 112, 112, 112, 112, 114, 114, 114, 114,
+    114, 114, 114, 116, 116, 116, 116, 116, 116, 116, 118, 118, 118, 118, 118,
+    118, 118, 120, 120, 120, 120, 120, 120, 120, 120,
+});
+
+constexpr size_t kWeightPowArraySize = 100;
+static_assert(kWeightPowArraySize == std::size(kWeightPow), "Wrong size");
+static_assert(kWeightPowArraySize == std::size(kWeightPow11), "Wrong size");
+static_assert(kWeightPowArraySize == std::size(kWeightPowShiftJis),
+              "Wrong size");
+
+constexpr auto kAngleSkew = std::to_array<const int8_t>({
+    -0,  -2,  -3,  -5,  -7,  -9,  -11, -12, -14, -16, -18, -19, -21, -23, -25,
+    -27, -29, -31, -32, -34, -36, -38, -40, -42, -45, -47, -49, -51, -53, -55,
+});
+
+// Returns negative values on failure.
+int GetWeightLevel(FX_Charset charset, size_t index) {
+  if (index >= kWeightPowArraySize) {
+    return -1;
+  }
+
+  if (charset == FX_Charset::kShiftJIS) {
+    return kWeightPowShiftJis[index];
+  }
+  return kWeightPow11[index];
+}
+
+int GetSkewFromAngle(int angle) {
+  // |angle| is non-positive so |-angle| is used as the index. Need to make sure
+  // |angle| != INT_MIN since -INT_MIN is undefined.
+  if (angle > 0 || angle == std::numeric_limits<int>::min() ||
+      static_cast<size_t>(-angle) >= std::size(kAngleSkew)) {
+    return -58;
+  }
+  return kAngleSkew[-angle];
+}
+
+int FTPosToCBoxInt(FT_Pos pos) {
+  // Boundary values to avoid integer overflow when multiplied by 1000.
+  static constexpr FT_Pos kMinCBox = -2147483;
+  static constexpr FT_Pos kMaxCBox = 2147483;
+  return static_cast<int>(std::clamp(pos, kMinCBox, kMaxCBox));
+}
+
+void Outline_CheckEmptyContour(OUTLINE_PARAMS* param) {
+  size_t size;
+  {
+    pdfium::span<const CFX_Path::Point> points = param->path_->GetPoints();
+    size = points.size();
+
+    if (size >= 2 &&
+        points[size - 2].IsTypeAndOpen(CFX_Path::Point::Type::kMove) &&
+        points[size - 2].point_ == points[size - 1].point_) {
+      size -= 2;
+    }
+    if (size >= 4 &&
+        points[size - 4].IsTypeAndOpen(CFX_Path::Point::Type::kMove) &&
+        points[size - 3].IsTypeAndOpen(CFX_Path::Point::Type::kBezier) &&
+        points[size - 3].point_ == points[size - 4].point_ &&
+        points[size - 2].point_ == points[size - 4].point_ &&
+        points[size - 1].point_ == points[size - 4].point_) {
+      size -= 4;
+    }
+  }
+  // Only safe after |points| has been destroyed.
+  param->path_->GetPoints().resize(size);
+}
+
+int Outline_MoveTo(const FT_Vector* to, void* user) {
+  OUTLINE_PARAMS* param = static_cast<OUTLINE_PARAMS*>(user);
+
+  Outline_CheckEmptyContour(param);
+
+  param->path_->ClosePath();
+  param->path_->AppendPoint(CFX_PointF(to->x / kCoordUnit, to->y / kCoordUnit),
+                            CFX_Path::Point::Type::kMove);
+
+  param->cur_x_ = to->x;
+  param->cur_y_ = to->y;
+  return 0;
+}
+
+int Outline_LineTo(const FT_Vector* to, void* user) {
+  OUTLINE_PARAMS* param = static_cast<OUTLINE_PARAMS*>(user);
+
+  param->path_->AppendPoint(CFX_PointF(to->x / kCoordUnit, to->y / kCoordUnit),
+                            CFX_Path::Point::Type::kLine);
+
+  param->cur_x_ = to->x;
+  param->cur_y_ = to->y;
+  return 0;
+}
+
+int Outline_ConicTo(const FT_Vector* control, const FT_Vector* to, void* user) {
+  OUTLINE_PARAMS* param = static_cast<OUTLINE_PARAMS*>(user);
+
+  param->path_->AppendPoint(
+      CFX_PointF(
+          (param->cur_x_ + (control->x - param->cur_x_) * 2 / 3) / kCoordUnit,
+          (param->cur_y_ + (control->y - param->cur_y_) * 2 / 3) / kCoordUnit),
+      CFX_Path::Point::Type::kBezier);
+
+  param->path_->AppendPoint(
+      CFX_PointF((control->x + (to->x - control->x) / 3) / kCoordUnit,
+                 (control->y + (to->y - control->y) / 3) / kCoordUnit),
+      CFX_Path::Point::Type::kBezier);
+
+  param->path_->AppendPoint(CFX_PointF(to->x / kCoordUnit, to->y / kCoordUnit),
+                            CFX_Path::Point::Type::kBezier);
+
+  param->cur_x_ = to->x;
+  param->cur_y_ = to->y;
+  return 0;
+}
+
+int Outline_CubicTo(const FT_Vector* control1,
+                    const FT_Vector* control2,
+                    const FT_Vector* to,
+                    void* user) {
+  OUTLINE_PARAMS* param = static_cast<OUTLINE_PARAMS*>(user);
+
+  param->path_->AppendPoint(
+      CFX_PointF(control1->x / kCoordUnit, control1->y / kCoordUnit),
+      CFX_Path::Point::Type::kBezier);
+
+  param->path_->AppendPoint(
+      CFX_PointF(control2->x / kCoordUnit, control2->y / kCoordUnit),
+      CFX_Path::Point::Type::kBezier);
+
+  param->path_->AppendPoint(CFX_PointF(to->x / kCoordUnit, to->y / kCoordUnit),
+                            CFX_Path::Point::Type::kBezier);
+
+  param->cur_x_ = to->x;
+  param->cur_y_ = to->y;
+  return 0;
+}
+
+FT_Encoding ToFTEncoding(fxge::FontEncoding encoding) {
+  switch (encoding) {
+    case fxge::FontEncoding::kAdobeCustom:
+      return FT_ENCODING_ADOBE_CUSTOM;
+    case fxge::FontEncoding::kAdobeExpert:
+      return FT_ENCODING_ADOBE_EXPERT;
+    case fxge::FontEncoding::kAdobeStandard:
+      return FT_ENCODING_ADOBE_STANDARD;
+    case fxge::FontEncoding::kAppleRoman:
+      return FT_ENCODING_APPLE_ROMAN;
+    case fxge::FontEncoding::kBig5:
+      return FT_ENCODING_BIG5;
+    case fxge::FontEncoding::kGB2312:
+      return FT_ENCODING_PRC;
+    case fxge::FontEncoding::kJohab:
+      return FT_ENCODING_JOHAB;
+    case fxge::FontEncoding::kLatin1:
+      return FT_ENCODING_ADOBE_LATIN_1;
+    case fxge::FontEncoding::kNone:
+      return FT_ENCODING_NONE;
+    case fxge::FontEncoding::kOldLatin2:
+      return FT_ENCODING_OLD_LATIN_2;
+    case fxge::FontEncoding::kSjis:
+      return FT_ENCODING_SJIS;
+    case fxge::FontEncoding::kSymbol:
+      return FT_ENCODING_MS_SYMBOL;
+    case fxge::FontEncoding::kUnicode:
+      return FT_ENCODING_UNICODE;
+    case fxge::FontEncoding::kWansung:
+      return FT_ENCODING_WANSUNG;
+  }
+}
+
+fxge::FontEncoding ToFontEncoding(uint32_t ft_encoding) {
+  switch (ft_encoding) {
+    case FT_ENCODING_ADOBE_CUSTOM:
+      return fxge::FontEncoding::kAdobeCustom;
+    case FT_ENCODING_ADOBE_EXPERT:
+      return fxge::FontEncoding::kAdobeExpert;
+    case FT_ENCODING_ADOBE_STANDARD:
+      return fxge::FontEncoding::kAdobeStandard;
+    case FT_ENCODING_APPLE_ROMAN:
+      return fxge::FontEncoding::kAppleRoman;
+    case FT_ENCODING_BIG5:
+      return fxge::FontEncoding::kBig5;
+    case FT_ENCODING_PRC:
+      return fxge::FontEncoding::kGB2312;
+    case FT_ENCODING_JOHAB:
+      return fxge::FontEncoding::kJohab;
+    case FT_ENCODING_ADOBE_LATIN_1:
+      return fxge::FontEncoding::kLatin1;
+    case FT_ENCODING_NONE:
+      return fxge::FontEncoding::kNone;
+    case FT_ENCODING_OLD_LATIN_2:
+      return fxge::FontEncoding::kOldLatin2;
+    case FT_ENCODING_SJIS:
+      return fxge::FontEncoding::kSjis;
+    case FT_ENCODING_MS_SYMBOL:
+      return fxge::FontEncoding::kSymbol;
+    case FT_ENCODING_UNICODE:
+      return fxge::FontEncoding::kUnicode;
+    case FT_ENCODING_WANSUNG:
+      return fxge::FontEncoding::kWansung;
+  }
+  NOTREACHED();
+}
+
+FX_RECT FXRectFromFTPos(FT_Pos left, FT_Pos top, FT_Pos right, FT_Pos bottom) {
+  return FX_RECT(pdfium::checked_cast<int32_t>(left),
+                 pdfium::checked_cast<int32_t>(top),
+                 pdfium::checked_cast<int32_t>(right),
+                 pdfium::checked_cast<int32_t>(bottom));
+}
+
+FX_RECT ScaledFXRectFromFTPos(FT_Pos left,
+                              FT_Pos top,
+                              FT_Pos right,
+                              FT_Pos bottom,
+                              int x_scale,
+                              int y_scale) {
+  if (x_scale == 0 || y_scale == 0) {
+    return FXRectFromFTPos(left, top, right, bottom);
+  }
+
+  return FXRectFromFTPos(left * 1000 / x_scale, top * 1000 / y_scale,
+                         right * 1000 / x_scale, bottom * 1000 / y_scale);
+}
+
+FT_Render_Mode FtRenderModeFromFontAntiAliasingMode(
+    FontAntiAliasingMode anti_alias) {
+  switch (anti_alias) {
+    case FontAntiAliasingMode::kNormal:
+      return FT_RENDER_MODE_NORMAL;
+    case FontAntiAliasingMode::kMono:
+      return FT_RENDER_MODE_MONO;
+    case FontAntiAliasingMode::kLcd:
+      return FT_RENDER_MODE_LCD;
+  }
+  NOTREACHED();
+}
+
+// Sets the given transform on the FaceRec, and resets it to the identity when
+// it goes out of scope.
+class ScopedFaceTransform {
+ public:
+  FX_STACK_ALLOCATED();
+
+  ScopedFaceTransform(FT_FaceRec* rec, FT_Matrix* matrix) : rec_(rec) {
+    FT_Set_Transform(rec_, matrix, nullptr);
+  }
+
+  ~ScopedFaceTransform() {
+    FT_Matrix matrix = {0x10000L, 0L, 0L, 0x10000L};
+    FT_Set_Transform(rec_, &matrix, nullptr);
+  }
+
+ private:
+  UnownedPtr<FT_FaceRec> const rec_;
+};
+
+}  // namespace
+
+// static
+RetainPtr<CFX_Face> CFX_Face::New(RetainPtr<Retainable> cache_entry,
+                                  RetainPtr<CFX_ReadOnlySpanStream> font_stream,
+                                  uint32_t face_index) {
+  CFX_FontMgr* font_mgr = CFX_GEModule::Get()->GetFontMgr();
+  pdfium::span<const uint8_t> data = font_stream->span();
+  FT_FaceRec* face_rec = nullptr;
+  if (FT_New_Memory_Face(font_mgr->GetFTLibrary(), data.data(),
+                         pdfium::checked_cast<FT_Long>(data.size()),
+                         pdfium::checked_cast<FT_Long>(face_index),
+                         &face_rec) != 0) {
+    return nullptr;
+  }
+  if (FT_Set_Pixel_Sizes(face_rec, 64, 64) != 0) {
+    return nullptr;
+  }
+  // Private ctor.
+  auto result = pdfium::WrapRetain(
+      new CFX_Face(std::move(cache_entry), std::move(font_stream), face_rec));
+#if defined(PDF_ENABLE_SKIA_TYPEFACE_CHECKS)
+  result->skia_typeface_ = font_mgr->MakeSkTypeface(result->GetData());
+#endif
+  return result;
+}
+
+bool CFX_Face::HasGlyphNames() const {
+  return !!(GetRec()->face_flags & FT_FACE_FLAG_GLYPH_NAMES);
+}
+
+bool CFX_Face::IsTtOt() const {
+  return !!(GetRec()->face_flags & FT_FACE_FLAG_SFNT);
+}
+
+ByteString CFX_Face::GetFontFormat() {
+  return ByteString(FT_Get_Font_Format(GetRec()));
+}
+
+bool CFX_Face::IsTricky() const {
+  return !!(GetRec()->face_flags & FT_FACE_FLAG_TRICKY);
+}
+
+bool CFX_Face::IsFixedWidth() const {
+  return !!(GetRec()->face_flags & FT_FACE_FLAG_FIXED_WIDTH);
+}
+
+#if defined(PDF_ENABLE_XFA)
+bool CFX_Face::IsScalable() const {
+  return !!(GetRec()->face_flags & FT_FACE_FLAG_SCALABLE);
+}
+#endif
+
+bool CFX_Face::IsItalic() const {
+  return !!(GetRec()->style_flags & FT_STYLE_FLAG_ITALIC);
+}
+
+bool CFX_Face::IsBold() const {
+  return !!(GetRec()->style_flags & FT_STYLE_FLAG_BOLD);
+}
+
+ByteString CFX_Face::GetFamilyName() const {
+  return ByteString(GetRec()->family_name);
+}
+
+ByteString CFX_Face::GetStyleName() const {
+  return ByteString(GetRec()->style_name);
+}
+
+FX_RECT CFX_Face::GetBBox() const {
+  return FX_RECT(pdfium::checked_cast<int32_t>(GetRec()->bbox.xMin),
+                 pdfium::checked_cast<int32_t>(GetRec()->bbox.yMin),
+                 pdfium::checked_cast<int32_t>(GetRec()->bbox.xMax),
+                 pdfium::checked_cast<int32_t>(GetRec()->bbox.yMax));
+}
+
+uint16_t CFX_Face::GetUnitsPerEm() const {
+  return pdfium::checked_cast<uint16_t>(GetRec()->units_per_EM);
+}
+
+int16_t CFX_Face::GetAscender() const {
+  return pdfium::checked_cast<int16_t>(GetRec()->ascender);
+}
+
+int16_t CFX_Face::GetDescender() const {
+  return pdfium::checked_cast<int16_t>(GetRec()->descender);
+}
+
+pdfium::span<const uint8_t> CFX_Face::GetData() const {
+  return font_stream_->span();
+}
+
+size_t CFX_Face::GetSfntTable(uint32_t table, pdfium::span<uint8_t> buffer) {
+  unsigned long length = pdfium::checked_cast<unsigned long>(buffer.size());
+  if (length) {
+    int error = FT_Load_Sfnt_Table(GetRec(), table, 0, buffer.data(), &length);
+    if (error || length != buffer.size()) {
+      return 0;
+    }
+    return buffer.size();
+  }
+
+  int error = FT_Load_Sfnt_Table(GetRec(), table, 0, nullptr, &length);
+  if (error || !length) {
+    return 0;
+  }
+  return pdfium::checked_cast<size_t>(length);
+}
+
+#if defined(PDF_ENABLE_XFA)
+std::optional<std::array<uint32_t, 4>> CFX_Face::GetOs2UnicodeRange() {
+  auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(GetRec(), FT_SFNT_OS2));
+  if (!os2) {
+    return std::nullopt;
+  }
+  return std::array<uint32_t, 4>{static_cast<uint32_t>(os2->ulUnicodeRange1),
+                                 static_cast<uint32_t>(os2->ulUnicodeRange2),
+                                 static_cast<uint32_t>(os2->ulUnicodeRange3),
+                                 static_cast<uint32_t>(os2->ulUnicodeRange4)};
+}
+#endif  // defined(PDF_ENABLE_XFA)
+
+#if defined(PDF_ENABLE_XFA) || BUILDFLAG(IS_ANDROID)
+std::optional<std::array<uint32_t, 2>> CFX_Face::GetOs2CodePageRange() {
+  auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(GetRec(), FT_SFNT_OS2));
+  if (!os2) {
+    return std::nullopt;
+  }
+  return std::array<uint32_t, 2>{static_cast<uint32_t>(os2->ulCodePageRange1),
+                                 static_cast<uint32_t>(os2->ulCodePageRange2)};
+}
+
+std::optional<std::array<uint8_t, 2>> CFX_Face::GetOs2Panose() {
+  auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(GetRec(), FT_SFNT_OS2));
+  if (!os2) {
+    return std::nullopt;
+  }
+  return std::array<uint8_t, 2>{os2->panose[0], os2->panose[1]};
+}
+#endif  // defined(PDF_ENABLE_XFA) || BUILDFLAG(IS_ANDROID)
+
+int CFX_Face::GetGlyphCount() const {
+  return pdfium::checked_cast<int>(GetRec()->num_glyphs);
+}
+
+std::unique_ptr<CFX_GlyphBitmap> CFX_Face::RenderGlyph(
+    uint32_t glyph_index,
+    bool font_style,
+    bool is_vertical,
+    const CFX_Matrix& matrix,
+    int dest_width,
+    FontAntiAliasingMode anti_alias,
+    const CFX_SubstFont* subst_font) {
+  FT_Matrix ft_matrix;
+  ft_matrix.xx = matrix.a / 64 * 65536;
+  ft_matrix.xy = matrix.c / 64 * 65536;
+  ft_matrix.yx = matrix.b / 64 * 65536;
+  ft_matrix.yy = matrix.d / 64 * 65536;
+  bool bUseCJKSubFont = false;
+  if (subst_font) {
+    bUseCJKSubFont = subst_font->subst_cjk_ && font_style;
+    int angle;
+    if (bUseCJKSubFont) {
+      angle = subst_font->italic_cjk_ ? -15 : 0;
+    } else {
+      angle = subst_font->italic_angle_;
+    }
+    if (angle) {
+      int skew = GetSkewFromAngle(angle);
+      if (is_vertical) {
+        ft_matrix.yx += ft_matrix.yy * skew / 100;
+      } else {
+        ft_matrix.xy -= ft_matrix.xx * skew / 100;
+      }
+    }
+    if (subst_font->IsBuiltInGenericFont()) {
+      AdjustVariationParams(glyph_index, dest_width, subst_font->weight_);
+    }
+  }
+
+  ScopedFaceTransform scoped_transform(GetRec(), &ft_matrix);
+  int load_flags = FT_LOAD_NO_BITMAP | FT_LOAD_PEDANTIC;
+  if (!IsTtOt()) {
+    load_flags |= FT_LOAD_NO_HINTING;
+  }
+  FT_FaceRec* rec = GetRec();
+  int error = FT_Load_Glyph(rec, glyph_index, load_flags);
+  if (error) {
+    // if an error is returned, try to reload glyphs without hinting.
+    if (load_flags & FT_LOAD_NO_HINTING) {
+      return nullptr;
+    }
+
+    load_flags |= FT_LOAD_NO_HINTING;
+    load_flags &= ~FT_LOAD_PEDANTIC;
+    error = FT_Load_Glyph(rec, glyph_index, load_flags);
+    if (error) {
+      return nullptr;
+    }
+  }
+
+  auto* glyph = rec->glyph;
+  int weight;
+  if (bUseCJKSubFont) {
+    weight = subst_font->weight_cjk_;
+  } else {
+    weight = subst_font ? subst_font->weight_ : 0;
+  }
+  if (subst_font && !subst_font->IsBuiltInGenericFont() && weight > 400) {
+    uint32_t index = (weight - 400) / 10;
+    pdfium::CheckedNumeric<signed long> level =
+        GetWeightLevel(subst_font->charset_, index);
+    if (level.ValueOrDefault(-1) < 0) {
+      return nullptr;
+    }
+
+    level = level *
+            (abs(static_cast<int>(ft_matrix.xx)) +
+             abs(static_cast<int>(ft_matrix.xy))) /
+            36655;
+    FT_Outline_Embolden(&glyph->outline, level.ValueOrDefault(0));
+  }
+  CFX_FontMgr* font_mgr = CFX_GEModule::Get()->GetFontMgr();
+  FT_Library_SetLcdFilter(font_mgr->GetFTLibrary(), FT_LCD_FILTER_DEFAULT);
+  error =
+      FT_Render_Glyph(glyph, FtRenderModeFromFontAntiAliasingMode(anti_alias));
+  if (error) {
+    return nullptr;
+  }
+
+  const FT_Bitmap& ft_bitmap = glyph->bitmap;
+  if (ft_bitmap.width > kMaxGlyphDimension ||
+      ft_bitmap.rows > kMaxGlyphDimension) {
+    return nullptr;
+  }
+  int dib_width = ft_bitmap.width;
+  const FXDIB_Format format = anti_alias == FontAntiAliasingMode::kMono
+                                  ? FXDIB_Format::k1bppMask
+                                  : FXDIB_Format::k8bppMask;
+  RetainPtr<CFX_DIBitmap> new_bitmap = pdfium::MakeRetain<CFX_DIBitmap>();
+  if (!new_bitmap->Create(dib_width, ft_bitmap.rows, format)) {
+    return nullptr;
+  }
+  auto pGlyphBitmap = std::make_unique<CFX_GlyphBitmap>(
+      glyph->bitmap_left, glyph->bitmap_top, new_bitmap);
+
+  const uint32_t dest_pitch = new_bitmap->GetPitch();
+  const uint32_t src_pitch = abs(ft_bitmap.pitch);
+  pdfium::span<uint8_t> dest_span = new_bitmap->GetWritableBuffer();
+  pdfium::span<const uint8_t> src_span =
+      UNSAFE_TODO(pdfium::span<const uint8_t>(ft_bitmap.buffer,
+                                              src_pitch * ft_bitmap.rows));
+
+  if (anti_alias != FontAntiAliasingMode::kMono &&
+      ft_bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
+    for (unsigned int i = 0; i < ft_bitmap.rows; i++) {
+      for (unsigned int n = 0; n < ft_bitmap.width; n++) {
+        dest_span[n] = (src_span[n / 8] & (0x80 >> (n % 8))) ? 255 : 0;
+      }
+      dest_span = dest_span.subspan(dest_pitch);
+      src_span = src_span.subspan(src_pitch);
+    }
+  } else {
+    std::ranges::fill(dest_span, 0);
+    const uint32_t rowbytes = std::min(src_pitch, dest_pitch);
+    for (unsigned int row = 0; row < ft_bitmap.rows; row++) {
+      fxcrt::spancpy(dest_span, src_span.first(rowbytes));
+      dest_span = dest_span.subspan(dest_pitch);
+      src_span = src_span.subspan(src_pitch);
+    }
+  }
+  return pGlyphBitmap;
+}
+
+std::unique_ptr<CFX_Path> CFX_Face::LoadGlyphPath(
+    uint32_t glyph_index,
+    int dest_width,
+    bool is_vertical,
+    const CFX_SubstFont* subst_font) {
+  FT_FaceRec* rec = GetRec();
+  FT_Set_Pixel_Sizes(rec, 0, 64);
+  FT_Matrix ft_matrix = {65536, 0, 0, 65536};
+  if (subst_font) {
+    if (subst_font->italic_angle_) {
+      int skew = GetSkewFromAngle(subst_font->italic_angle_);
+      if (is_vertical) {
+        ft_matrix.yx += ft_matrix.yy * skew / 100;
+      } else {
+        ft_matrix.xy -= ft_matrix.xx * skew / 100;
+      }
+    }
+    if (subst_font->IsBuiltInGenericFont()) {
+      AdjustVariationParams(glyph_index, dest_width, subst_font->weight_);
+    }
+  }
+  ScopedFaceTransform scoped_transform(GetRec(), &ft_matrix);
+  int load_flags = FT_LOAD_NO_BITMAP;
+  if (!IsTtOt() || !IsTricky()) {
+    load_flags |= FT_LOAD_NO_HINTING;
+  }
+  if (FT_Load_Glyph(rec, glyph_index, load_flags)) {
+    return nullptr;
+  }
+  if (subst_font && !subst_font->IsBuiltInGenericFont() &&
+      subst_font->weight_ > 400) {
+    uint32_t index = std::min<uint32_t>((subst_font->weight_ - 400) / 10,
+                                        kWeightPowArraySize - 1);
+    int level;
+    if (subst_font->charset_ == FX_Charset::kShiftJIS) {
+      level = kWeightPowShiftJis[index] * 65536 / 36655;
+    } else {
+      level = kWeightPow[index];
+    }
+    FT_Outline_Embolden(&rec->glyph->outline, level);
+  }
+
+  FT_Outline_Funcs funcs;
+  funcs.move_to = Outline_MoveTo;
+  funcs.line_to = Outline_LineTo;
+  funcs.conic_to = Outline_ConicTo;
+  funcs.cubic_to = Outline_CubicTo;
+  funcs.shift = 0;
+  funcs.delta = 0;
+
+  auto pPath = std::make_unique<CFX_Path>();
+  OUTLINE_PARAMS params = {
+      .path_ = pPath.get(),
+      .cur_x_ = 0,
+      .cur_y_ = 0,
+  };
+
+  FT_Outline_Decompose(&rec->glyph->outline, &funcs, &params);
+  if (pPath->GetPoints().empty()) {
+    return nullptr;
+  }
+
+  Outline_CheckEmptyContour(&params);
+  pPath->ClosePath();
+  return pPath;
+}
+
+int CFX_Face::GetGlyphTTWidth() const {
+  const auto* fontglyph = GetRec()->glyph;
+  return NormalizeFontMetric(fontglyph->metrics.horiAdvance, GetUnitsPerEm());
+}
+
+int CFX_Face::GetGlyphWidth(uint32_t glyph_index,
+                            int dest_width,
+                            int weight,
+                            const CFX_SubstFont* subst_font) {
+  if (subst_font && subst_font->IsBuiltInGenericFont()) {
+    AdjustVariationParams(glyph_index, dest_width, weight);
+  }
+
+  FT_FaceRec* rec = GetRec();
+  int err = FT_Load_Glyph(
+      rec, glyph_index, FT_LOAD_NO_SCALE | FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH);
+  if (err) {
+    return 0;
+  }
+
+  FT_Pos horizontal_advance = rec->glyph->metrics.horiAdvance;
+  if (horizontal_advance < kThousandthMinInt ||
+      horizontal_advance > kThousandthMaxInt) {
+    return 0;
+  }
+
+  return static_cast<int>(EM_ADJUST(GetUnitsPerEm(), horizontal_advance));
+}
+
+ByteString CFX_Face::GetGlyphName(uint32_t glyph_index) {
+  char name[256] = {};
+  FT_Get_Glyph_Name(GetRec(), glyph_index, name, sizeof(name));
+  name[255] = 0;
+  return ByteString(name);
+}
+
+int CFX_Face::GetCharIndex(uint32_t code) {
+  return FT_Get_Char_Index(GetRec(), code);
+}
+
+int CFX_Face::GetNameIndex(const char* name) {
+  return FT_Get_Name_Index(GetRec(), name);
+}
+
+int CFX_Face::LoadGlyph(uint32_t glyph_index, bool scale) {
+  FT_Int32 args = FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH;
+  if (!scale) {
+    args |= FT_LOAD_NO_SCALE;
+  }
+  return FT_Load_Glyph(GetRec(), glyph_index, args);
+}
+
+ByteString CFX_Face::GetPostscriptName() {
+  return FT_Get_Postscript_Name(GetRec());
+}
+
+CFX_Size CFX_Face::GetPixelSize() const {
+  int pixel_size_x = GetRec()->size->metrics.x_ppem;
+  int pixel_size_y = GetRec()->size->metrics.y_ppem;
+  return {pixel_size_x, pixel_size_y};
+}
+
+std::optional<FX_RECT> CFX_Face::GetFontGlyphBBox(uint32_t glyph_index) {
+  if (IsTricky()) {
+    int error = FT_Set_Char_Size(GetRec(), 0, 1000 * 64, 72, 72);
+    if (error) {
+      return std::nullopt;
+    }
+
+    error = LoadGlyph(glyph_index, /*scale=*/true);
+    if (error) {
+      return std::nullopt;
+    }
+
+    FT_Glyph glyph;
+    error = FT_Get_Glyph(GetRec()->glyph, &glyph);
+    if (error) {
+      return std::nullopt;
+    }
+
+    FT_BBox cbox;
+    FT_Glyph_Get_CBox(glyph, FT_GLYPH_BBOX_PIXELS, &cbox);
+    CFX_Size pixelSize = GetPixelSize();
+    FX_RECT result =
+        ScaledFXRectFromFTPos(cbox.xMin, cbox.yMax, cbox.xMax, cbox.yMin,
+                              pixelSize.width, pixelSize.height);
+    result.top = std::min(result.top, static_cast<int>(GetAscender()));
+    result.bottom = std::max(result.bottom, static_cast<int>(GetDescender()));
+    FT_Done_Glyph(glyph);
+    return result;
+  }
+  if (LoadGlyph(glyph_index, /*scale=*/false) != 0) {
+    return std::nullopt;
+  }
+  int em = GetUnitsPerEm();
+  return ScaledFXRectFromFTPos(
+      GetRec()->glyph->metrics.horiBearingX,
+      GetRec()->glyph->metrics.horiBearingY - GetRec()->glyph->metrics.height,
+      GetRec()->glyph->metrics.horiBearingX + GetRec()->glyph->metrics.width,
+      GetRec()->glyph->metrics.horiBearingY, em, em);
+}
+
+FX_RECT CFX_Face::GetCharBBox(uint32_t code, int glyph_index) {
+  FX_RECT rect;
+  FT_FaceRec* rec = GetRec();
+  if (IsTricky()) {
+    int err =
+        FT_Load_Glyph(rec, glyph_index, FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH);
+    if (!err) {
+      FT_Glyph glyph;
+      err = FT_Get_Glyph(rec->glyph, &glyph);
+      if (!err) {
+        FT_BBox cbox;
+        FT_Glyph_Get_CBox(glyph, FT_GLYPH_BBOX_PIXELS, &cbox);
+        const int xMin = FTPosToCBoxInt(cbox.xMin);
+        const int xMax = FTPosToCBoxInt(cbox.xMax);
+        const int yMin = FTPosToCBoxInt(cbox.yMin);
+        const int yMax = FTPosToCBoxInt(cbox.yMax);
+        const int pixel_size_x = rec->size->metrics.x_ppem;
+        const int pixel_size_y = rec->size->metrics.y_ppem;
+        if (pixel_size_x == 0 || pixel_size_y == 0) {
+          rect = FX_RECT(xMin, yMax, xMax, yMin);
+        } else {
+          rect =
+              FX_RECT(xMin * 1000 / pixel_size_x, yMax * 1000 / pixel_size_y,
+                      xMax * 1000 / pixel_size_x, yMin * 1000 / pixel_size_y);
+        }
+        rect.top = std::min(rect.top, static_cast<int>(GetAscender()));
+        rect.bottom = std::max(rect.bottom, static_cast<int>(GetDescender()));
+        FT_Done_Glyph(glyph);
+      }
+    }
+  } else {
+    int err = FT_Load_Glyph(rec, glyph_index, FT_LOAD_NO_SCALE);
+    if (err == 0) {
+      rect = GetGlyphBBox();
+      if (rect.top <= kMaxRectTop) {
+        rect.top += rect.top / 64;
+      } else {
+        rect.top = std::numeric_limits<int>::max();
+      }
+    }
+  }
+  return rect;
+}
+
+FX_RECT CFX_Face::GetGlyphBBox() const {
+  const auto* glyph = GetRec()->glyph;
+  pdfium::ClampedNumeric<FT_Pos> left = glyph->metrics.horiBearingX;
+  pdfium::ClampedNumeric<FT_Pos> top = glyph->metrics.horiBearingY;
+  const uint16_t upem = GetUnitsPerEm();
+  return FX_RECT(NormalizeFontMetric(left, upem),
+                 NormalizeFontMetric(top, upem),
+                 NormalizeFontMetric(left + glyph->metrics.width, upem),
+                 NormalizeFontMetric(top - glyph->metrics.height, upem));
+}
+
+std::vector<CharCodeAndIndex> CFX_Face::GetCharCodesAndIndices(
+    char32_t max_char) {
+  CharCodeAndIndex char_code_and_index;
+  char_code_and_index.char_code = static_cast<uint32_t>(
+      FT_Get_First_Char(GetRec(), &char_code_and_index.glyph_index));
+  if (char_code_and_index.char_code > max_char) {
+    return {};
+  }
+  std::vector<CharCodeAndIndex> results = {char_code_and_index};
+  while (true) {
+    char_code_and_index.char_code = static_cast<uint32_t>(FT_Get_Next_Char(
+        GetRec(), results.back().char_code, &char_code_and_index.glyph_index));
+    if (char_code_and_index.char_code > max_char ||
+        char_code_and_index.glyph_index == 0) {
+      return results;
+    }
+    results.push_back(char_code_and_index);
+  }
+}
+
+CFX_Face::CharMap CFX_Face::GetCurrentCharMap() const {
+  return GetRec()->charmap;
+}
+
+std::optional<fxge::FontEncoding> CFX_Face::GetCurrentCharMapEncoding() const {
+  if (!GetRec()->charmap) {
+    return std::nullopt;
+  }
+  return ToFontEncoding(GetRec()->charmap->encoding);
+}
+
+CFX_Face::CharMapId CFX_Face::GetCharMapIdByIndex(size_t index) const {
+  return {.platform_id = GetCharMapPlatformIdByIndex(index),
+          .encoding_id = GetCharMapEncodingIdByIndex(index)};
+}
+
+int CFX_Face::GetCharMapPlatformIdByIndex(size_t index) const {
+  return GetCharMaps()[index]->platform_id;
+}
+
+int CFX_Face::GetCharMapEncodingIdByIndex(size_t index) const {
+  return GetCharMaps()[index]->encoding_id;
+}
+
+fxge::FontEncoding CFX_Face::GetCharMapEncodingByIndex(size_t index) const {
+  return ToFontEncoding(GetCharMaps()[index]->encoding);
+}
+
+size_t CFX_Face::GetCharMapCount() const {
+  return GetRec()->charmaps
+             ? pdfium::checked_cast<size_t>(GetRec()->num_charmaps)
+             : 0;
+}
+
+pdfium::span<const FT_CharMap> CFX_Face::GetCharMaps() const {
+  size_t count = GetCharMapCount();
+  if (count == 0) {
+    return {};
+  }
+  // SAFETY: required from library to provide correct count.
+  return UNSAFE_BUFFERS({GetRec()->charmaps, count});
+}
+
+void CFX_Face::SetCharMap(CharMap map) {
+  FT_Set_Charmap(GetRec(), static_cast<FT_CharMap>(map));
+}
+
+void CFX_Face::SetCharMapByIndex(size_t index) {
+  CHECK_LT(index, GetCharMapCount());
+  // SAFETY: required from library as enforced by check above.
+  SetCharMap(UNSAFE_BUFFERS(GetRec()->charmaps[index]));
+}
+
+bool CFX_Face::SelectCharMap(fxge::FontEncoding encoding) {
+  FT_Error error = FT_Select_Charmap(GetRec(), ToFTEncoding(encoding));
+  return !error;
+}
+
+#if defined(PDF_ENABLE_XFA)
+int CFX_Face::GetNumFaces() const {
+  return pdfium::checked_cast<int>(GetRec()->num_faces);
+}
+#endif
+
+#if BUILDFLAG(IS_WIN)
+bool CFX_Face::CanEmbed() {
+  FT_UShort fstype = FT_Get_FSType_Flags(GetRec());
+  return (fstype & (FT_FSTYPE_RESTRICTED_LICENSE_EMBEDDING |
+                    FT_FSTYPE_BITMAP_EMBEDDING_ONLY)) == 0;
+}
+#endif
+
+CFX_Face::CFX_Face(RetainPtr<Retainable> cache_entry,
+                   RetainPtr<CFX_ReadOnlySpanStream> font_stream,
+                   FT_FaceRec* rec)
+    : cache_entry_(std::move(cache_entry)),
+      font_stream_(std::move(font_stream)),
+      rec_(rec) {
+  DCHECK(rec_);
+}
+
+#if defined(PDF_USE_SKIA)
+SkTypeface* CFX_Face::GetOrCreateSkTypeface() {
+  if (!skia_typeface_) {
+    skia_typeface_ =
+        CFX_GEModule::Get()->GetFontMgr()->MakeSkTypeface(GetData());
+  }
+  return skia_typeface_.get();
+}
+#endif
+
+CFX_Face::~CFX_Face() = default;
+
+void CFX_Face::AdjustVariationParams(int glyph_index,
+                                     int dest_width,
+                                     int weight) {
+  DCHECK_GE(dest_width, 0);
+
+  FT_FaceRec* rec = GetRec();
+  ScopedFXFTMMVar variation_desc(rec);
+  if (!variation_desc) {
+    return;
+  }
+
+  FT_Pos coords[2];
+  if (weight == 0) {
+    coords[0] = variation_desc.GetAxisDefault(0) / 65536;
+  } else {
+    coords[0] = weight;
+  }
+
+  if (dest_width == 0) {
+    coords[1] = variation_desc.GetAxisDefault(1) / 65536;
+  } else {
+    FT_Long min_param = variation_desc.GetAxisMin(1) / 65536;
+    FT_Long max_param = variation_desc.GetAxisMax(1) / 65536;
+    coords[1] = min_param;
+    FT_Set_MM_Design_Coordinates(rec, 2, coords);
+    FT_Load_Glyph(rec, glyph_index,
+                  FT_LOAD_NO_SCALE | FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH);
+    FT_Pos min_width = rec->glyph->metrics.horiAdvance * 1000 / GetUnitsPerEm();
+    coords[1] = max_param;
+    FT_Set_MM_Design_Coordinates(rec, 2, coords);
+    FT_Load_Glyph(rec, glyph_index,
+                  FT_LOAD_NO_SCALE | FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH);
+    FT_Pos max_width = rec->glyph->metrics.horiAdvance * 1000 / GetUnitsPerEm();
+    if (max_width == min_width) {
+      return;
+    }
+    FT_Pos param = min_param + (max_param - min_param) *
+                                   (dest_width - min_width) /
+                                   (max_width - min_width);
+    coords[1] = param;
+  }
+  FT_Set_MM_Design_Coordinates(rec, 2, coords);
+}
+
+#if defined(PDF_ENABLE_XFA) || BUILDFLAG(IS_ANDROID)
+uint32_t CFX_Face::GetFontStyle() {
+  uint32_t style = 0;
+  if (IsBold()) {
+    style |= pdfium::kFontStyleForceBold;
+  }
+  if (IsItalic()) {
+    style |= pdfium::kFontStyleItalic;
+  }
+  if (IsFixedWidth()) {
+    style |= pdfium::kFontStyleFixedPitch;
+  }
+
+  std::optional<std::array<uint32_t, 2>> code_page_range =
+      GetOs2CodePageRange();
+  if (code_page_range.has_value() && (code_page_range.value()[0] & (1 << 31))) {
+    style |= pdfium::kFontStyleSymbolic;
+  }
+
+  std::optional<std::array<uint8_t, 2>> panose = GetOs2Panose();
+  if (panose.has_value() && panose.value()[0] == 2) {
+    uint8_t serif = panose.value()[1];
+    if ((serif > 1 && serif < 10) || serif > 13) {
+      style |= pdfium::kFontStyleSerif;
+    }
+  }
+  return style;
+}
+#endif  // defined(PDF_ENABLE_XFA) || BUILDFLAG(IS_ANDROID)

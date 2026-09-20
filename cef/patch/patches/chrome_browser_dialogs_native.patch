@@ -1,0 +1,298 @@
+diff --git chrome/browser/file_select_helper.cc chrome/browser/file_select_helper.cc
+index b8a24fda3ec85b3dc866fdc8c9e06b3e10147cd8..c32e1b1be25f13c8c8ced4a2b55c48bcb5f33f61 100644
+--- chrome/browser/file_select_helper.cc
++++ chrome/browser/file_select_helper.cc
+@@ -259,6 +259,12 @@ void FileSelectHelper::OnListDone(int error) {
+   }
+ 
+   if (dialog_type_ == ui::SelectFileDialog::SELECT_UPLOAD_FOLDER) {
++    if (run_from_cef_) {
++      // Don't show the upload confirmation dialog when triggered via CEF
++      // (initially or recursively).
++      PerformContentAnalysisIfNeeded(std::move(chooser_files));
++      return;
++    }
+     auto model = CreateConfirmationDialog(
+         entry->display_name_, std::move(chooser_files),
+         base::BindOnce(&FileSelectHelper::PerformContentAnalysisIfNeeded,
+@@ -457,31 +463,51 @@ FileSelectHelper::GetFileTypesFromAcceptType(
+   std::vector<base::FilePath::StringType>* extensions =
+       &file_type->extensions.back();
+ 
++  // Create individual filters for each accept type.
++  std::vector<std::vector<base::FilePath::StringType>> all_extensions;
++  std::vector<std::u16string> all_overrides;
++  std::vector<std::u16string> all_mimetypes;
++
+   // Find the corresponding extensions.
+   int valid_type_count = 0;
+   int description_id = 0;
++  std::string ascii_type;
+   for (const auto& accept_type : accept_types) {
++    std::vector<base::FilePath::StringType> current_extensions;
++    description_id = 0;
++    ascii_type.clear();
++
+     size_t old_extension_size = extensions->size();
+     if (accept_type[0] == '.') {
+       // If the type starts with a period it is assumed to be a file extension
+       // so we just have to add it to the list.
+       base::FilePath::StringType ext =
+           base::FilePath::FromUTF16Unsafe(accept_type).value();
+-      extensions->push_back(ext.substr(1));
++      current_extensions.push_back(ext.substr(1));
+     } else {
+       if (!base::IsStringASCII(accept_type))
+         continue;
+-      std::string ascii_type = base::UTF16ToASCII(accept_type);
++      ascii_type = base::UTF16ToASCII(accept_type);
+       if (ascii_type == "image/*")
+         description_id = IDS_IMAGE_FILES;
+       else if (ascii_type == "audio/*")
+         description_id = IDS_AUDIO_FILES;
+       else if (ascii_type == "video/*")
+         description_id = IDS_VIDEO_FILES;
+-
+-      net::GetExtensionsForMimeType(ascii_type, extensions);
++      net::GetExtensionsForMimeType(ascii_type, &current_extensions);
+     }
+ 
++    if (!current_extensions.empty()) {
++      all_extensions.push_back(current_extensions);
++      all_overrides.push_back(description_id != 0 ?
++                              l10n_util::GetStringUTF16(description_id) :
++                              std::u16string());
++      all_mimetypes.push_back(ascii_type.empty() ?
++                              std::u16string() : accept_type);
++
++      extensions->insert(extensions->end(), current_extensions.begin(),
++                         current_extensions.end());
++    }
+     if (extensions->size() > old_extension_size)
+       valid_type_count++;
+   }
+@@ -498,12 +524,28 @@ FileSelectHelper::GetFileTypesFromAcceptType(
+   //    dialog uses the first extension in the list to form the description,
+   //    like "EHTML Files". This is not what we want.
+   if (valid_type_count > 1 ||
+-      (valid_type_count == 1 && description_id == 0 && extensions->size() > 1))
++      (valid_type_count == 1 && description_id == 0 && extensions->size() > 1)) {
+     description_id = IDS_CUSTOM_FILES;
++    ascii_type.clear();
++  }
+ 
+-  if (description_id) {
+-    file_type->extension_description_overrides.push_back(
+-        l10n_util::GetStringUTF16(description_id));
++  file_type->extension_description_overrides.push_back(
++      description_id != 0 ?
++          l10n_util::GetStringUTF16(description_id) :
++          std::u16string());
++  file_type->extension_mimetypes.push_back(
++      ascii_type.empty() ? std::u16string() : base::ASCIIToUTF16(ascii_type));
++
++  if (all_extensions.size() > 1) {
++    // Insert filters for the specific accept types at the beginning.
++    file_type->extensions.insert(file_type->extensions.begin(),
++        all_extensions.begin(), all_extensions.end());
++    file_type->extension_description_overrides.insert(
++        file_type->extension_description_overrides.begin(),
++        all_overrides.begin(), all_overrides.end());
++    file_type->extension_mimetypes.insert(
++        file_type->extension_mimetypes.begin(),
++        all_mimetypes.begin(), all_mimetypes.end());
+   }
+ 
+   return file_type;
+@@ -513,7 +555,8 @@ FileSelectHelper::GetFileTypesFromAcceptType(
+ void FileSelectHelper::RunFileChooser(
+     content::RenderFrameHost* render_frame_host,
+     scoped_refptr<content::FileSelectListener> listener,
+-    const FileChooserParams& params) {
++    const FileChooserParams& params,
++    bool run_from_cef) {
+   Profile* profile = Profile::FromBrowserContext(
+       render_frame_host->GetProcess()->GetBrowserContext());
+ 
+@@ -521,6 +564,7 @@ void FileSelectHelper::RunFileChooser(
+   // message.
+   scoped_refptr<FileSelectHelper> file_select_helper(
+       new FileSelectHelper(profile));
++  file_select_helper->run_from_cef_ = run_from_cef;
+   file_select_helper->RunFileChooser(render_frame_host, std::move(listener),
+                                      params.Clone());
+ }
+diff --git chrome/browser/file_select_helper.h chrome/browser/file_select_helper.h
+index 37c575db8a2c4a92f4b89691f4357ef7206b2710..ba572985c16f306e37d37f2948d8041bbeb6a635 100644
+--- chrome/browser/file_select_helper.h
++++ chrome/browser/file_select_helper.h
+@@ -69,7 +69,8 @@ class FileSelectHelper : public base::RefCountedThreadSafe<
+   static void RunFileChooser(
+       content::RenderFrameHost* render_frame_host,
+       scoped_refptr<content::FileSelectListener> listener,
+-      const blink::mojom::FileChooserParams& params);
++      const blink::mojom::FileChooserParams& params,
++      bool run_from_cef = false);
+ 
+   // Enumerates all the files in directory.
+   static void EnumerateDirectory(
+@@ -338,6 +339,9 @@ class FileSelectHelper : public base::RefCountedThreadSafe<
+   std::unique_ptr<ScopedTuckPictureInPicture> scoped_tuck_picture_in_picture_;
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
++  // Set to true if this dialog was triggered via CEF.
++  bool run_from_cef_ = false;
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   base::WeakPtrFactory<FileSelectHelper> weak_ptr_factory_{this};
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+diff --git chrome/browser/ui/select_file_policy/chrome_select_file_policy.h chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
+index 993b89dca34875d458370dc0730a98fb36bf7bff..d82beccf7014fe79c84b82d549d4015ee5c23b95 100644
+--- chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
++++ chrome/browser/ui/select_file_policy/chrome_select_file_policy.h
+@@ -30,6 +30,8 @@ class ChromeSelectFilePolicy : public ui::SelectFilePolicy {
+   // Returns true if local state allows showing file pickers.
+   static bool FileSelectDialogsAllowed();
+ 
++  content::WebContents* source_contents() const { return source_contents_; }
++
+  private:
+   raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged> source_contents_;
+ };
+diff --git ui/shell_dialogs/execute_select_file_win.cc ui/shell_dialogs/execute_select_file_win.cc
+index b9f46bd6ebf8da7c668a67a7a3aea0e35910cbe3..ca2dceef5e0a077a2394f528e0156e6fef0c7293 100644
+--- ui/shell_dialogs/execute_select_file_win.cc
++++ ui/shell_dialogs/execute_select_file_win.cc
+@@ -31,7 +31,7 @@ namespace ui {
+ namespace {
+ 
+ // Stop switch for the AutoCloseDialogEventHandler.
+-BASE_FEATURE(kAutoCloseFileDialogs, base::FEATURE_ENABLED_BY_DEFAULT);
++BASE_FEATURE(kAutoCloseFileDialogs, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // RAII wrapper around AutoCloseDialogEventHandler.
+ class ScopedAutoCloseDialogEventHandler {
+diff --git ui/shell_dialogs/select_file_dialog.cc ui/shell_dialogs/select_file_dialog.cc
+index d44aa9ea9f3f81e2d6dd3f28f67980ded747f7d8..60f42e1299d5cd909974de91cd48c4b79b4c1590 100644
+--- ui/shell_dialogs/select_file_dialog.cc
++++ ui/shell_dialogs/select_file_dialog.cc
+@@ -90,8 +90,10 @@ void SelectFileDialog::SetFactory(
+ // static
+ scoped_refptr<SelectFileDialog> SelectFileDialog::Create(
+     Listener* listener,
+-    std::unique_ptr<ui::SelectFilePolicy> policy) {
+-  if (dialog_factory_)
++    std::unique_ptr<ui::SelectFilePolicy> policy,
++    bool run_from_cef) {
++  // Avoid reentrancy of the CEF factory.
++  if (dialog_factory_ && (!run_from_cef || !dialog_factory_->IsCefFactory()))
+     return dialog_factory_->Create(listener, std::move(policy));
+   return CreateSelectFileDialog(listener, std::move(policy));
+ }
+diff --git ui/shell_dialogs/select_file_dialog.h ui/shell_dialogs/select_file_dialog.h
+index b0f4b3df0a4f10b306ba2d25e5fd51440a25bcd4..7fbb2be86bce8cf7676c0166a5510335ab94e0b5 100644
+--- ui/shell_dialogs/select_file_dialog.h
++++ ui/shell_dialogs/select_file_dialog.h
+@@ -96,7 +96,8 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
+   // listener when there are no calls to SelectFile() outstanding.
+   static scoped_refptr<SelectFileDialog> Create(
+       Listener* listener,
+-      std::unique_ptr<SelectFilePolicy> policy);
++      std::unique_ptr<SelectFilePolicy> policy,
++      bool run_from_cef = false);
+ 
+   SelectFileDialog(const SelectFileDialog&) = delete;
+   SelectFileDialog& operator=(const SelectFileDialog&) = delete;
+@@ -130,6 +131,10 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
+     // FileTypeExtensions instead of this and the above vector?
+     std::vector<std::u16string> extension_description_overrides;
+ 
++    // Original mime types for the specified extensions. Entries correspond to
++    // |extensions|; if left blank then there was no mime type.
++    std::vector<std::u16string> extension_mimetypes;
++
+     // Specifies whether there will be a filter added for all files (i.e. *.*).
+     bool include_all_files = false;
+ 
+@@ -224,6 +229,19 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
+                   const GURL* caller = nullptr);
+   bool HasMultipleFileTypeChoices();
+ 
++  // Match the types used by CefWindowHandle.
++#if BUILDFLAG(IS_MAC)
++  using WidgetType = void*;
++  static constexpr WidgetType kNullWidget = nullptr;
++#else
++  using WidgetType = gfx::AcceleratedWidget;
++  static constexpr WidgetType kNullWidget = gfx::kNullAcceleratedWidget;
++#endif
++
++  void set_owning_widget(WidgetType widget) {
++    owning_widget_ = widget;
++  }
++
+  protected:
+   friend class base::RefCountedThreadSafe<SelectFileDialog>;
+ 
+@@ -248,6 +266,11 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
+   // The listener to be notified of selection completion.
+   raw_ptr<Listener> listener_;
+ 
++  std::unique_ptr<SelectFilePolicy> select_file_policy_;
++
++  // Support override of the |owning_window| value.
++  WidgetType owning_widget_ = kNullWidget;
++
+  private:
+   // Tests if the file selection dialog can be displayed by
+   // testing if the AllowFileSelectionDialogs-Policy is
+@@ -260,8 +283,6 @@ class SHELL_DIALOGS_EXPORT SelectFileDialog
+ 
+   // Returns true if the dialog has multiple file type choices.
+   virtual bool HasMultipleFileTypeChoicesImpl() = 0;
+-
+-  std::unique_ptr<SelectFilePolicy> select_file_policy_;
+ };
+ 
+ SelectFileDialog* CreateSelectFileDialog(
+diff --git ui/shell_dialogs/select_file_dialog_factory.h ui/shell_dialogs/select_file_dialog_factory.h
+index c7acd9b05fbb8c94c37a03c9b7e170548cb3dfbb..3e95e4125fa245e9671437e847058a865a52876a 100644
+--- ui/shell_dialogs/select_file_dialog_factory.h
++++ ui/shell_dialogs/select_file_dialog_factory.h
+@@ -24,6 +24,8 @@ class SHELL_DIALOGS_EXPORT SelectFileDialogFactory {
+   virtual SelectFileDialog* Create(
+       ui::SelectFileDialog::Listener* listener,
+       std::unique_ptr<ui::SelectFilePolicy> policy) = 0;
++
++  virtual bool IsCefFactory() const { return false; }
+ };
+ 
+ }  // namespace ui
+diff --git ui/shell_dialogs/select_file_dialog_mac.mm ui/shell_dialogs/select_file_dialog_mac.mm
+index 5da67cfb7362d01fac8d0be4565d319087ec3cf9..6e618083bc851ba2d9a11adebfeb8ac1afffa89c 100644
+--- ui/shell_dialogs/select_file_dialog_mac.mm
++++ ui/shell_dialogs/select_file_dialog_mac.mm
+@@ -105,6 +105,10 @@ void SelectFileDialogImpl::SelectFileImpl(
+     mojo_window->CreateSelectFileDialog(std::move(receiver));
+   } else {
+     NSWindow* ns_window = gfx_window.GetNativeNSWindow();
++    if (!ns_window && owning_widget_) {
++      NSView* view = ((__bridge NSView*)owning_widget_);
++      ns_window = [view window];
++    }
+     mojo::MakeSelfOwnedReceiver(
+         std::make_unique<remote_cocoa::SelectFileDialogBridge>(ns_window),
+         std::move(receiver));
+diff --git ui/shell_dialogs/select_file_dialog_win.cc ui/shell_dialogs/select_file_dialog_win.cc
+index e3edd353d533ad35749cca0e0a248e47d371f821..863f04f0a5d29f2ec6dc1d7cd31b41badcee7488 100644
+--- ui/shell_dialogs/select_file_dialog_win.cc
++++ ui/shell_dialogs/select_file_dialog_win.cc
+@@ -250,6 +250,8 @@ void SelectFileDialogImpl::SelectFileImpl(
+   HWND owner = owning_window && owning_window->GetRootWindow()
+                    ? owning_window->GetHost()->GetAcceleratedWidget()
+                    : nullptr;
++  if (!owner)
++    owner = owning_widget_;
+ 
+   std::unique_ptr<RunState> run_state = BeginRun(owner);
+ 

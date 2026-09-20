@@ -1,0 +1,146 @@
+diff --git chrome/browser/profiles/off_the_record_profile_impl.cc chrome/browser/profiles/off_the_record_profile_impl.cc
+index a42a144af7e12d864c2a35833cdeb6f21558be6e..79faa609726714cb0b0b06069437dfabaeb92c71 100644
+--- chrome/browser/profiles/off_the_record_profile_impl.cc
++++ chrome/browser/profiles/off_the_record_profile_impl.cc
+@@ -634,7 +634,9 @@ std::unique_ptr<Profile> Profile::CreateOffTheRecordProfile(
+ #endif
+   if (!profile)
+     profile = std::make_unique<OffTheRecordProfileImpl>(parent, otr_profile_id);
+-  profile->Init();
++  // With CEF we want to delay initialization.
++  if (!otr_profile_id.IsUniqueForCEF())
++    profile->Init();
+   return std::move(profile);
+ }
+ 
+diff --git chrome/browser/profiles/profile.cc chrome/browser/profiles/profile.cc
+index 8905fccd5148e5dd6cbc71e5ded09dfbcad015b3..2ca7b438534e775b63a9fe27ea418b2359714371 100644
+--- chrome/browser/profiles/profile.cc
++++ chrome/browser/profiles/profile.cc
+@@ -103,6 +103,7 @@ constexpr char kPrimaryOTRProfileID[] = "profile::primary_otr";
+ // differentiated by such prefixes. Consult with the profile owners before
+ // proceeding if you believe a new prefix is strictly necessary.
+ // See `chrome/browser/PRESUBMIT.py` which enforces this via a warning.
++constexpr char kCEFOTRProfileIDPrefix[] = "CEF::BrowserContext";
+ constexpr char kDevToolsOTRProfileIDPrefix[] = "Devtools::BrowserContext";
+ constexpr char kMediaRouterOTRProfileIDPrefix[] = "MediaRouter::Presentation";
+ constexpr char kTestOTRProfileIDPrefix[] = "Test::OTR";
+@@ -123,6 +124,8 @@ bool Profile::OTRProfileID::AllowsBrowserWindows() const {
+   // DevTools::BrowserContext, MediaRouter::Presentation, and
+   // CaptivePortal::Signin are exceptions to this ban.
+   if (*this == PrimaryID() || IsDevTools() ||
++      base::StartsWith(profile_id_, kCEFOTRProfileIDPrefix,
++                       base::CompareCase::SENSITIVE) ||
+       base::StartsWith(profile_id_, kMediaRouterOTRProfileIDPrefix,
+                        base::CompareCase::SENSITIVE)) {
+     return true;
+@@ -163,6 +166,16 @@ Profile::OTRProfileID Profile::OTRProfileID::CreateUnique(
+       base::Uuid::GenerateRandomV4().AsLowercaseString().c_str()));
+ }
+ 
++// static
++Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForCEF() {
++  return CreateUnique(kCEFOTRProfileIDPrefix);
++}
++
++bool Profile::OTRProfileID::IsUniqueForCEF() const {
++  return base::StartsWith(profile_id_, kCEFOTRProfileIDPrefix,
++                          base::CompareCase::SENSITIVE);
++}
++
+ // static
+ Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForDevTools() {
+   return CreateUnique(kDevToolsOTRProfileIDPrefix);
+diff --git chrome/browser/profiles/profile.h chrome/browser/profiles/profile.h
+index 97e16c6ce952ce11a5d6e445fe599a3f6687bcd8..950e56fb1405c82a272ab0d3212be49f9f28c14e 100644
+--- chrome/browser/profiles/profile.h
++++ chrome/browser/profiles/profile.h
+@@ -88,6 +88,10 @@ class Profile : public content::BrowserContext {
+     // details.
+     static OTRProfileID CreateUnique(const std::string& profile_id_prefix);
+ 
++    // Creates a unique OTR profile id to be used for CEF browser contexts.
++    static OTRProfileID CreateUniqueForCEF();
++    bool IsUniqueForCEF() const;
++
+     // Creates a unique OTR profile id to be used for DevTools browser contexts.
+     static OTRProfileID CreateUniqueForDevTools();
+ 
+@@ -492,6 +496,9 @@ class Profile : public content::BrowserContext {
+   static Profile* FromJavaObject(const jni_zero::JavaRef<jobject>& obj);
+   jni_zero::ScopedJavaLocalRef<jobject> GetJavaObject() const;
+ #endif  // BUILDFLAG(IS_ANDROID)
++
++  void NotifyOffTheRecordProfileCreated(Profile* off_the_record);
++
+  protected:
+   // Creates an OffTheRecordProfile which points to this Profile.
+   static std::unique_ptr<Profile> CreateOffTheRecordProfile(
+@@ -504,7 +511,6 @@ class Profile : public content::BrowserContext {
+       Profile*,
+       bool incognito_pref_store);
+ 
+-  void NotifyOffTheRecordProfileCreated(Profile* off_the_record);
+   void NotifyProfileInitializationComplete();
+ 
+   // Returns whether the user has signed in this profile to an account.
+diff --git chrome/browser/profiles/profile_impl.cc chrome/browser/profiles/profile_impl.cc
+index b253e452ee4f8623550cdf0f7df1bed4101f1573..2d8bcb9a8127dc157b24c3f2aff5f44e6160e018 100644
+--- chrome/browser/profiles/profile_impl.cc
++++ chrome/browser/profiles/profile_impl.cc
+@@ -39,6 +39,7 @@
+ #include "base/version.h"
+ #include "build/build_config.h"
+ #include "build/chromeos_buildflags.h"
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/background/background_contents_service_factory.h"
+ #include "chrome/browser/background_fetch/background_fetch_delegate_factory.h"
+ #include "chrome/browser/background_fetch/background_fetch_delegate_impl.h"
+@@ -233,6 +234,10 @@
+ #include "chrome/browser/background/extensions/background_mode_manager.h"  // nogncheck crbug.com/40147906
+ #endif
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/prefs/pref_names.h"
++#endif
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+ #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"  // nogncheck crbug.com/40147906
+ #include "chrome/browser/extensions/extension_special_storage_policy.h"  // nogncheck crbug.com/40147906
+@@ -281,6 +286,12 @@ class ScopedAllowBlockingForProfile : public base::ScopedAllowBlocking {};
+ 
+ namespace {
+ 
++#if BUILDFLAG(ENABLE_CEF)
++BASE_FEATURE(kStorageNotificationService,
++             "StorageNotificationService",
++             base::FEATURE_ENABLED_BY_DEFAULT);
++#endif
++
+ #if BUILDFLAG(ENABLE_SESSION_SERVICE)
+ // Delay before we explicitly create the SessionService.
+ static constexpr base::TimeDelta kCreateSessionServiceDelay =
+@@ -1017,7 +1028,9 @@ Profile* ProfileImpl::GetOffTheRecordProfile(const OTRProfileID& otr_profile_id,
+ 
+   otr_profiles_[otr_profile_id] = std::move(otr_profile);
+ 
+-  NotifyOffTheRecordProfileCreated(raw_otr_profile);
++  // With CEF we want to delay initialization.
++  if (!otr_profile_id.IsUniqueForCEF())
++    NotifyOffTheRecordProfileCreated(raw_otr_profile);
+ 
+   return raw_otr_profile;
+ }
+@@ -1329,6 +1342,12 @@ ProfileImpl::GetStorageNotificationService() {
+ #if BUILDFLAG(IS_ANDROID)
+   return nullptr;
+ #else
++#if BUILDFLAG(ENABLE_CEF)
++  if (!base::FeatureList::IsEnabled(kStorageNotificationService) ||
++      !GetPrefs()->GetBoolean(cef::prefs::kEnableStorageNotificationService)) {
++    return nullptr;
++  }
++#endif
+   return StorageNotificationServiceFactory::GetForBrowserContext(this);
+ #endif
+ }

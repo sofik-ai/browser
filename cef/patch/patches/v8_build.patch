@@ -1,0 +1,33 @@
+diff --git BUILD.gn BUILD.gn
+index dd22a8954e19e836405a7e6a2fcdb3241abbbf3d..aa79a7bb07c964eda631c482e9a9e0d87cdbd829 100644
+--- BUILD.gn
++++ BUILD.gn
+@@ -14,6 +14,7 @@ import("//build/config/mips.gni")
+ import("//build/config/riscv.gni")
+ import("//build/config/sanitizers/sanitizers.gni")
+ import("//build_overrides/build.gni")
++import("//cef/libcef/features/features.gni")
+ import("//third_party/icu/config.gni")
+ 
+ import("gni/cluster_build.gni")
+@@ -486,6 +487,9 @@ declare_args() {
+   # Experimental testing mode where various limits are artificially set lower.
+   v8_lower_limits_mode = false
+ 
++  # Set to true if V8 will be used in a shared library.
++  v8_used_in_shared_library = enable_cef
++
+   # Enables the use of partition_alloc as the default allocator for standalone
+   # V8. This should be used for benchmarking and testing purposes to more
+   # closely mimic in-browser behavior.
+@@ -918,6 +922,10 @@ config("internal_config") {
+     defines += [ "BUILDING_V8_SHARED" ]
+   }
+ 
++  if (v8_used_in_shared_library) {
++    defines += [ "V8_TLS_USED_IN_LIBRARY" ]
++  }
++
+   if (v8_current_cpu == "riscv64" || v8_current_cpu == "riscv32") {
+     if (!is_clang) {
+       libs = [ "atomic" ]

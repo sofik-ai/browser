@@ -1,0 +1,75 @@
+diff --git chrome/browser/ui/bookmarks/bookmark_stats.cc chrome/browser/ui/bookmarks/bookmark_stats.cc
+index fbaea519da90c9162a93517bb2f8d575302e51f8..33a675c522d809c5e24a69ec2f055888d54de198 100644
+--- chrome/browser/ui/bookmarks/bookmark_stats.cc
++++ chrome/browser/ui/bookmarks/bookmark_stats.cc
+@@ -21,7 +21,9 @@ bool IsBookmarkBarLocation(BookmarkLaunchLocation location) {
+ 
+ auto GetMetricProfile(const Profile* profile) {
+   DCHECK(profile);
+-  DCHECK(profile->IsRegularProfile() || profile->IsIncognitoProfile());
++  DCHECK(profile->IsRegularProfile() || profile->IsIncognitoProfile() ||
++         (profile->IsOffTheRecord() &&
++          profile->GetOTRProfileID().IsUniqueForCEF()));
+   return profile->IsRegularProfile()
+              ? profile_metrics::BrowserProfileType::kRegular
+              : profile_metrics::BrowserProfileType::kIncognito;
+diff --git chrome/browser/ui/views/incognito_clear_browsing_data_dialog.cc chrome/browser/ui/views/incognito_clear_browsing_data_dialog.cc
+index f2c7a8ee6b49ab72158827ab8a04a6bae719ae5b..381e516de4735f832a27cb5087c22f5ceb325992 100644
+--- chrome/browser/ui/views/incognito_clear_browsing_data_dialog.cc
++++ chrome/browser/ui/views/incognito_clear_browsing_data_dialog.cc
+@@ -31,7 +31,9 @@ IncognitoClearBrowsingDataDialog::IncognitoClearBrowsingDataDialog(
+       dialog_type_(type),
+       incognito_profile_(incognito_profile) {
+   DCHECK(incognito_profile_);
+-  DCHECK(incognito_profile_->IsIncognitoProfile());
++  DCHECK(incognito_profile_->IsIncognitoProfile() ||
++         (incognito_profile_->IsOffTheRecord() &&
++          incognito_profile_->GetOTRProfileID().IsUniqueForCEF()));
+   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+   SetShowCloseButton(true);
+ 
+diff --git chrome/browser/ui/views/incognito_clear_browsing_data_dialog_coordinator.cc chrome/browser/ui/views/incognito_clear_browsing_data_dialog_coordinator.cc
+index 3b00411a070a7e741f46338e91442c1f0449205b..552b2d450c65ec1ee1587258d2ffb179208d8e12 100644
+--- chrome/browser/ui/views/incognito_clear_browsing_data_dialog_coordinator.cc
++++ chrome/browser/ui/views/incognito_clear_browsing_data_dialog_coordinator.cc
+@@ -22,6 +22,10 @@ IncognitoClearBrowsingDataDialogCoordinator::
+ void IncognitoClearBrowsingDataDialogCoordinator::Show(
+     IncognitoClearBrowsingDataDialogInterface::Type type,
+     views::BubbleAnchor anchor) {
++  // The full toolbar may not be visible.
++  if (anchor.IsNull())
++    return;
++
+   if (bubble_tracker_.view() && bubble_tracker_.view()->GetWidget()) {
+     // Ensure the previous bubble is closed before creating and showing the new
+     // one.
+diff --git chrome/browser/ui/views/profiles/incognito_menu_view.cc chrome/browser/ui/views/profiles/incognito_menu_view.cc
+index 9d687b375c397c93bf748b2c044bf38a935dd9b1..0f9aeed750c50062f5909f0d330369676385530a 100644
+--- chrome/browser/ui/views/profiles/incognito_menu_view.cc
++++ chrome/browser/ui/views/profiles/incognito_menu_view.cc
+@@ -31,7 +31,9 @@
+ IncognitoMenuView::IncognitoMenuView(views::BubbleAnchor anchor_element,
+                                      Browser* browser)
+     : ProfileMenuViewBase(anchor_element, browser) {
+-  CHECK(profile().IsIncognitoProfile());
++  CHECK(profile().IsIncognitoProfile() ||
++        (profile().IsOffTheRecord() &&
++         profile().GetOTRProfileID().IsUniqueForCEF()));
+   GetViewAccessibility().SetName(GetAccessibleWindowTitle(),
+                                  ax::mojom::NameFrom::kAttribute);
+ 
+diff --git chrome/browser/ui/views/profiles/profile_menu_coordinator.cc chrome/browser/ui/views/profiles/profile_menu_coordinator.cc
+index 94a8dbf56b9875401175cf53ec1af7c94bac2632..6892d9bc6a89709682869f36034668c351469f52 100644
+--- chrome/browser/ui/views/profiles/profile_menu_coordinator.cc
++++ chrome/browser/ui/views/profiles/profile_menu_coordinator.cc
+@@ -93,7 +93,9 @@ void ProfileMenuCoordinator::ShowWithPromoResults(
+   auto avatar_toolbar_button = GetAvatarToolbarButton();
+   std::unique_ptr<ProfileMenuViewBase> bubble;
+   const bool is_incognito = GetProfile()->IsIncognitoProfile();
+-  if (is_incognito) {
++  if (is_incognito ||
++         (GetProfile()->IsOffTheRecord() &&
++          GetProfile()->GetOTRProfileID().IsUniqueForCEF())) {
+     bubble =
+         std::make_unique<IncognitoMenuView>(avatar_toolbar_button, browser);
+   } else {

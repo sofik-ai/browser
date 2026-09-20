@@ -1,0 +1,18 @@
+diff --git tools/gritsettings/resource_ids.spec tools/gritsettings/resource_ids.spec
+index 9d69921f81c59f876be3f0dec43faa3ef34381eb..e3c02e484170bb5774f1efe7978aa147f2fa8aec 100644
+--- tools/gritsettings/resource_ids.spec
++++ tools/gritsettings/resource_ids.spec
+@@ -1746,6 +1746,13 @@
+   # END "everything else" section.
+   # Everything but chrome/, components/, content/, and ios/
+ 
++  "cef/libcef/resources/cef_resources.grd": {
++    "includes": [12500],
++  },
++  "cef/libcef/resources/cef_strings.grd": {
++    "messages": [12510],
++  }
++
+   # Thinking about appending to the end?
+   # Please read the header and find the right section above instead.
+ }

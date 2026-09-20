@@ -1,0 +1,420 @@
+diff --git chrome/browser/renderer_context_menu/render_view_context_menu.cc chrome/browser/renderer_context_menu/render_view_context_menu.cc
+index 556579d8e4cec6670e0a383e5b7e4bfc473a3fe3..1eee9e67c7150a32dd0db5405d847bd97a6e3c6f 100644
+--- chrome/browser/renderer_context_menu/render_view_context_menu.cc
++++ chrome/browser/renderer_context_menu/render_view_context_menu.cc
+@@ -430,6 +430,18 @@ ui::ImageModel GetLensContextMenuIcon() {
+   );
+ }
+ 
++RenderViewContextMenu::MenuCreatedCallback* GetMenuCreatedCallback() {
++  static base::NoDestructor<RenderViewContextMenu::MenuCreatedCallback>
++      callback;
++  return callback.get();
++}
++
++RenderViewContextMenu::MenuShowHandlerCallback* GetMenuShowHandlerCallback() {
++  static base::NoDestructor<RenderViewContextMenu::MenuShowHandlerCallback>
++      callback;
++  return callback.get();
++}
++
+ enum class UmaEnumIdLookupType {
+   GeneralEnumId,
+   ContextSpecificEnumId,
+@@ -703,6 +715,10 @@ int FindUMAEnumValueForCommand(int id, UmaEnumIdLookupType type) {
+     return 1;
+   }
+ 
++  // Match the MENU_ID_USER_FIRST to MENU_ID_USER_LAST range from cef_types.h.
++  if (id >= 26500 && id <= 28500)
++    return 1;
++
+   id = CollapseCommandsForUMA(id);
+   const auto& map = GetIdcToUmaMap(type);
+   auto it = map.find(id);
+@@ -988,6 +1004,14 @@ RenderViewContextMenu::RenderViewContextMenu(
+                     : nullptr;
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
++  auto* cb = GetMenuCreatedCallback();
++  if (!cb->is_null()) {
++    first_observer_ = cb->Run(this);
++    if (first_observer_) {
++      observers_.AddObserver(first_observer_.get());
++    }
++  }
++
+   observers_.AddObserver(&autofill_context_menu_manager_);
+ }
+ 
+@@ -1392,6 +1416,12 @@ void RenderViewContextMenu::InitMenu() {
+       content_type_->SupportsGroup(ContextMenuContentType::ITEM_GROUP_PAGE)) {
+     AppendReadAnythingItem();
+   }
++
++  if (first_observer_) {
++    // Do this last so that the observer can optionally modify previously
++    // created items.
++    first_observer_->InitMenu(params_);
++  }
+ }
+ 
+ Profile* RenderViewContextMenu::GetProfile() const {
+@@ -3776,6 +3806,26 @@ void RenderViewContextMenu::RemoveObserverForTesting(
+   observers_.RemoveObserver(observer);
+ }
+ 
++// static
++void RenderViewContextMenu::RegisterMenuCreatedCallback(
++    MenuCreatedCallback cb) {
++  *GetMenuCreatedCallback() = cb;
++}
++
++// static
++void RenderViewContextMenu::RegisterMenuShowHandlerCallback(
++    MenuShowHandlerCallback cb) {
++  *GetMenuShowHandlerCallback() = cb;
++}
++
++bool RenderViewContextMenu::UseShowHandler() {
++  auto* cb = GetMenuShowHandlerCallback();
++  if (!cb->is_null() && cb->Run(this)) {
++    return true;
++  }
++  return false;
++}
++
+ custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList
+ RenderViewContextMenu::GetHandlersForLinkUrl() {
+   custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList handlers =
+diff --git chrome/browser/renderer_context_menu/render_view_context_menu.h chrome/browser/renderer_context_menu/render_view_context_menu.h
+index 81a03cb08e2ec93e17bb03533dceaa1521485b03..d03335ed36c60d31f6dc533d5ffd663d4bad9d39 100644
+--- chrome/browser/renderer_context_menu/render_view_context_menu.h
++++ chrome/browser/renderer_context_menu/render_view_context_menu.h
+@@ -164,7 +164,21 @@ class RenderViewContextMenu
+   void AddObserverForTesting(RenderViewContextMenuObserver* observer);
+   void RemoveObserverForTesting(RenderViewContextMenuObserver* observer);
+ 
++  // Registers a callback that will be called each time a context menu is
++  // created.
++  using MenuCreatedCallback = base::RepeatingCallback<
++      std::unique_ptr<RenderViewContextMenuObserver>(RenderViewContextMenu*)>;
++  static void RegisterMenuCreatedCallback(MenuCreatedCallback cb);
++
++  // Registers a callback that will be called each time before context menu is
++  // shown. The callback should return true if the show has handled.
++  using MenuShowHandlerCallback = base::RepeatingCallback<
++      bool(RenderViewContextMenu*)>;
++  static void RegisterMenuShowHandlerCallback(MenuShowHandlerCallback cb);
++
+  protected:
++  bool UseShowHandler();
++
+   Profile* GetProfile() const;
+ 
+   // This may return nullptr (e.g. for WebUI dialogs). Virtual to allow tests to
+@@ -516,6 +530,9 @@ class RenderViewContextMenu
+   // Video frame sub-menu handling.
+   ui::SimpleMenuModel video_frame_submenu_model_;
+ 
++  // An observer returned via MenuCreatedCallback that will be called first.
++  std::unique_ptr<RenderViewContextMenuObserver> first_observer_;
++
+   // An observer that handles spelling suggestions, "Add to dictionary", and
+   // "Use enhanced spell check" items.
+   std::unique_ptr<SpellingMenuObserver> spelling_suggestions_menu_observer_;
+diff --git chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.h chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.h
+index 3506a973cf674e7fa8e377bf2cb5a729973897f4..a3600ffa009b07f82acd87b30e035982de4938a2 100644
+--- chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.h
++++ chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.h
+@@ -31,6 +31,7 @@ class RenderViewContextMenuMacCocoa : public RenderViewContextMenuMac {
+ 
+   // RenderViewContextMenu:
+   void Show() override;
++  bool IsRunning() override;
+ 
+  private:
+   // RenderViewContextMenuViewsMac:
+diff --git chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.mm chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.mm
+index 24afb177067748704df9a4f94927bd887c33dbbf..857df9a4ae500ded5186a83950c56202ceade126 100644
+--- chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.mm
++++ chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.mm
+@@ -75,6 +75,10 @@ RenderViewContextMenuMacCocoa::~RenderViewContextMenuMacCocoa() {
+ }
+ 
+ void RenderViewContextMenuMacCocoa::Show() {
++  if (UseShowHandler()) {
++    return;
++  }
++
+   views::Widget* widget = views::Widget::GetTopLevelWidgetForNativeView(
+       source_web_contents_->GetNativeView());
+ 
+@@ -99,6 +103,10 @@ void RenderViewContextMenuMacCocoa::Show() {
+                       views::ElementTrackerViews::GetContextForWidget(widget));
+ }
+ 
++bool RenderViewContextMenuMacCocoa::IsRunning() {
++  return menu_controller_ && [menu_controller_ isMenuOpen];
++}
++
+ void RenderViewContextMenuMacCocoa::CancelToolkitMenu() {
+   [menu_controller_ cancel];
+ }
+diff --git chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.h chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.h
+index 7838ec2e3f2b593ba73b52ebaa0c15600fccad11..1b1bae48dda845e664cc3b0a1432799e3dbd3afa 100644
+--- chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.h
++++ chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.h
+@@ -35,6 +35,7 @@ class RenderViewContextMenuMacRemoteCocoa : public RenderViewContextMenuMac {
+ 
+   // RenderViewContextMenu:
+   void Show() override;
++  bool IsRunning() override;
+ 
+  private:
+   // RenderViewContextMenuViewsMac:
+diff --git chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.mm chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.mm
+index ec7a5fdef0fdf08dedb1c3932c78d485730a7a1a..ba772758fe13ebcff3935bfb53a9e97a88909225 100644
+--- chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.mm
++++ chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_remote_cocoa.mm
+@@ -48,6 +48,10 @@ void RenderViewContextMenuMacRemoteCocoa::Show() {
+       target_view_id_);
+ }
+ 
++bool RenderViewContextMenuMacRemoteCocoa::IsRunning() {
++  return runner_ && runner_->IsRunning();
++}
++
+ void RenderViewContextMenuMacRemoteCocoa::CancelToolkitMenu() {
+   runner_->Cancel();
+ }
+diff --git chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
+index e3c0a319ce9750a4a11eda0dd2ded68521605a07..96a9d2cd4435e1b04f737d852c1d82d1e2c4a502 100644
+--- chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
++++ chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
+@@ -159,6 +159,9 @@ void RenderViewContextMenuViews::RunMenuAt(views::Widget* parent,
+ bool RenderViewContextMenuViews::GetAcceleratorForCommandId(
+     int command_id,
+     ui::Accelerator* accel) const {
++  if (RenderViewContextMenu::GetAcceleratorForCommandId(command_id, accel))
++    return true;
++
+   // There are no formally defined accelerators we can query so we assume
+   // that Ctrl+C, Ctrl+V, Ctrl+X, Ctrl-A, etc do what they normally do.
+   switch (command_id) {
+@@ -375,6 +378,10 @@ void RenderViewContextMenuViews::AppendPlatformEditableItems() {
+ }
+ 
+ void RenderViewContextMenuViews::Show() {
++  if (UseShowHandler()) {
++    return;
++  }
++
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kKioskMode)) {
+     return;
+   }
+@@ -421,6 +428,11 @@ void RenderViewContextMenuViews::Show() {
+   }
+ }
+ 
++bool RenderViewContextMenuViews::IsRunning() {
++  return static_cast<ToolkitDelegateViews*>(toolkit_delegate())
++             ->IsMenuRunning();
++}
++
+ views::Widget* RenderViewContextMenuViews::GetTopLevelWidget() {
+   return views::Widget::GetTopLevelWidgetForNativeView(GetActiveNativeView());
+ }
+diff --git chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.h chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.h
+index b0619927b062c86c3014741d120d36da56920742..abb1a674b81a38d8654c8df9af2b6e885686a853 100644
+--- chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.h
++++ chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.h
+@@ -47,6 +47,7 @@ class RenderViewContextMenuViews : public RenderViewContextMenu {
+ 
+   // RenderViewContextMenuBase implementation.
+   void Show() override;
++  bool IsRunning() override;
+ 
+  protected:
+   RenderViewContextMenuViews(content::RenderFrameHost& render_frame_host,
+diff --git chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.cc chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.cc
+index 08da10ce25c00e30abd9fc129e6020485d1cfb2a..b316378761986b686331af122d58c6ea30e3127e 100644
+--- chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.cc
++++ chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.cc
+@@ -101,6 +101,10 @@ void ChromeWebContentsViewDelegateViews::ShowMenu(
+   context_menu_->Show();
+ }
+ 
++bool ChromeWebContentsViewDelegateViews::IsMenuRunning() {
++  return context_menu_ && context_menu_->IsRunning();
++}
++
+ void ChromeWebContentsViewDelegateViews::ShowContextMenu(
+     content::RenderFrameHost& render_frame_host,
+     const content::ContextMenuParams& params) {
+diff --git chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.h chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.h
+index 11b494e1859b091e49901a5d8ec07804ce8231e7..091e23b39b9884fe1e6c64677c178fc279332fd5 100644
+--- chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.h
++++ chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.h
+@@ -70,6 +70,7 @@ class ChromeWebContentsViewDelegateViews
+       base::OnceCallback<void(std::unique_ptr<RenderViewContextMenuBase>)>
+           callback) override;
+   void ShowMenu(std::unique_ptr<RenderViewContextMenuBase> menu) override;
++  bool IsMenuRunning() override;
+ 
+  private:
+   void OnReadAvailableTypes(
+diff --git chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.h chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.h
+index e5c0a40841d38d0b7b163808090da145fbce7aa5..5367e9cebadb66bda847687ebdccc05c32d88065 100644
+--- chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.h
++++ chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.h
+@@ -69,6 +69,7 @@ class ChromeWebContentsViewDelegateViewsMac
+       base::OnceCallback<void(std::unique_ptr<RenderViewContextMenuBase>)>
+           callback) override;
+   void ShowMenu(std::unique_ptr<RenderViewContextMenuBase> menu) override;
++  bool IsMenuRunning() override;
+ 
+  private:
+   void OnReadAvailableTypes(
+diff --git chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm
+index 564c8c000c5be649a59bfc845fc8158bd6534240..fce6219db06feb493f90f5fc4ba28163dfdcf223 100644
+--- chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm
++++ chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views_mac.mm
+@@ -213,6 +213,10 @@ void ChromeWebContentsViewDelegateViewsMac::ShowMenu(
+   context_menu_->Show();
+ }
+ 
++bool ChromeWebContentsViewDelegateViewsMac::IsMenuRunning() {
++  return context_menu_ && context_menu_->IsRunning();
++}
++
+ content::RenderWidgetHostView*
+ ChromeWebContentsViewDelegateViewsMac::GetActiveRenderWidgetHostView() const {
+   return web_contents_->GetTopLevelRenderWidgetHostView();
+diff --git components/renderer_context_menu/context_menu_delegate.h components/renderer_context_menu/context_menu_delegate.h
+index 993cac555dd9ef936771a6e01f42666b734af13e..3d2847bb60fad63dece4a68b2ed1667d5a838657 100644
+--- components/renderer_context_menu/context_menu_delegate.h
++++ components/renderer_context_menu/context_menu_delegate.h
+@@ -55,6 +55,8 @@ class ContextMenuDelegate {
+   // Displays the context menu.
+   virtual void ShowMenu(std::unique_ptr<RenderViewContextMenuBase> menu) = 0;
+ 
++  virtual bool IsMenuRunning() = 0;
++
+  private:
+   raw_ptr<content::WebContents> web_contents_ = nullptr;
+ };
+diff --git components/renderer_context_menu/render_view_context_menu_base.cc components/renderer_context_menu/render_view_context_menu_base.cc
+index ad4a62e7b52962fd2cd7babba369d1a8ac474a39..3a8b295fa8fa4951aeabc9d19d98d08fd10ae18b 100644
+--- components/renderer_context_menu/render_view_context_menu_base.cc
++++ components/renderer_context_menu/render_view_context_menu_base.cc
+@@ -411,6 +411,17 @@ bool RenderViewContextMenuBase::IsCommandIdChecked(int id) const {
+   return false;
+ }
+ 
++bool RenderViewContextMenuBase::GetAcceleratorForCommandId(
++    int id,
++    ui::Accelerator* accelerator) const {
++  for (auto& observer : observers_) {
++    if (observer.IsCommandIdSupported(id))
++      return observer.GetAccelerator(id, accelerator);
++  }
++
++  return false;
++}
++
+ void RenderViewContextMenuBase::ExecuteCommand(int id, int event_flags) {
+   command_executed_ = true;
+   RecordUsedItem(id);
+diff --git components/renderer_context_menu/render_view_context_menu_base.h components/renderer_context_menu/render_view_context_menu_base.h
+index 4d106a6a66e7ca0c1bcfb18c2c11b38c1e670e8c..3c9b72d233c4f2ec8cd34462f6a3629e2d0a285e 100644
+--- components/renderer_context_menu/render_view_context_menu_base.h
++++ components/renderer_context_menu/render_view_context_menu_base.h
+@@ -84,8 +84,13 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
+   // Programmatically closes the context menu.
+   void Cancel();
+ 
++  virtual bool IsRunning() = 0;
++
+   const ui::SimpleMenuModel& menu_model() const { return menu_model_; }
+   const content::ContextMenuParams& params() const { return params_; }
++  content::WebContents* source_web_contents() const {
++    return source_web_contents_;
++  }
+ 
+   // Returns true if the specified command id is known and valid for
+   // this menu. If the command is known |enabled| is set to indicate
+@@ -94,6 +99,9 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
+ 
+   // SimpleMenuModel::Delegate implementation.
+   bool IsCommandIdChecked(int command_id) const override;
++  bool GetAcceleratorForCommandId(
++      int command_id,
++      ui::Accelerator* accelerator) const override;
+   void ExecuteCommand(int command_id, int event_flags) override;
+   void OnMenuWillShow(ui::SimpleMenuModel* source) override;
+   void MenuClosed(ui::SimpleMenuModel* source) override;
+diff --git components/renderer_context_menu/render_view_context_menu_observer.cc components/renderer_context_menu/render_view_context_menu_observer.cc
+index 9fdda1636003df5f0981f6073bc459fa5b5056ae..538bd05a412961e54214833fad915de7104b5154 100644
+--- components/renderer_context_menu/render_view_context_menu_observer.cc
++++ components/renderer_context_menu/render_view_context_menu_observer.cc
+@@ -15,3 +15,8 @@ bool RenderViewContextMenuObserver::IsCommandIdChecked(int command_id) {
+ bool RenderViewContextMenuObserver::IsCommandIdEnabled(int command_id) {
+   return false;
+ }
++
++bool RenderViewContextMenuObserver::GetAccelerator(int command_id,
++                                                   ui::Accelerator* accel) {
++  return false;
++}
+diff --git components/renderer_context_menu/render_view_context_menu_observer.h components/renderer_context_menu/render_view_context_menu_observer.h
+index b2aa338c76cd36031abe49190c1f43db4e2b6f03..233c34003bbc5a3e3588bdd60b3ba6ea4c426ea9 100644
+--- components/renderer_context_menu/render_view_context_menu_observer.h
++++ components/renderer_context_menu/render_view_context_menu_observer.h
+@@ -11,6 +11,10 @@ namespace content {
+ struct ContextMenuParams;
+ }
+ 
++namespace ui {
++class Accelerator;
++}
++
+ // The interface used for implementing context-menu items. The following
+ // instruction describe how to implement a context-menu item with this
+ // interface.
+@@ -100,6 +104,8 @@ class RenderViewContextMenuObserver {
+   virtual bool IsCommandIdChecked(int command_id);
+   virtual bool IsCommandIdEnabled(int command_id);
+ 
++  virtual bool GetAccelerator(int command_id, ui::Accelerator* accel);
++
+   // Called when a user selects the specified context-menu item. This is
+   // only called when the observer returns true for IsCommandIdSupported()
+   // for that |command_id|.
+diff --git components/renderer_context_menu/views/toolkit_delegate_views.cc components/renderer_context_menu/views/toolkit_delegate_views.cc
+index 0be2640c8173c86720b44a8ad4ab10fdf9e6686e..8bfdc6185690fbe01ba0aaab8c7bc6973a78a37c 100644
+--- components/renderer_context_menu/views/toolkit_delegate_views.cc
++++ components/renderer_context_menu/views/toolkit_delegate_views.cc
+@@ -31,6 +31,10 @@ void ToolkitDelegateViews::RunMenuAt(views::Widget* parent,
+                           anchor_position, type);
+ }
+ 
++bool ToolkitDelegateViews::IsMenuRunning() const {
++  return menu_runner_ && menu_runner_->IsRunning();
++}
++
+ void ToolkitDelegateViews::Init(ui::SimpleMenuModel* menu_model) {
+   menu_adapter_ = std::make_unique<views::MenuModelAdapter>(menu_model);
+   std::unique_ptr<views::MenuItemView> menu_view = menu_adapter_->CreateMenu();
+diff --git components/renderer_context_menu/views/toolkit_delegate_views.h components/renderer_context_menu/views/toolkit_delegate_views.h
+index 7762b3e6673d91edd01858bfd325ee57e3d9f766..5bd1544aaaa6229bd20955e0e0ded1360d1395b2 100644
+--- components/renderer_context_menu/views/toolkit_delegate_views.h
++++ components/renderer_context_menu/views/toolkit_delegate_views.h
+@@ -39,6 +39,7 @@ class ToolkitDelegateViews : public RenderViewContextMenuBase::ToolkitDelegate {
+                  const gfx::Point& point,
+                  ui::mojom::MenuSourceType type);
+   views::MenuItemView* menu_view() { return menu_view_; }
++  bool IsMenuRunning() const;
+ 
+  protected:
+   // ToolkitDelegate:

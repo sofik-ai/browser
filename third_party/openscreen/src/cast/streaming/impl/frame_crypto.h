@@ -1,0 +1,78 @@
+// Copyright 2019 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#ifndef CAST_STREAMING_IMPL_FRAME_CRYPTO_H_
+#define CAST_STREAMING_IMPL_FRAME_CRYPTO_H_
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include <array>
+#include <vector>
+
+#include "cast/streaming/public/encoded_frame.h"
+#include "openssl/aes.h"
+#include "platform/base/span.h"
+
+namespace openscreen::cast {
+
+class FrameCrypto;
+
+// A subclass of EncodedFrame that represents an EncodedFrame with encrypted
+// payload data, and owns the buffer storing the encrypted payload data. Use
+// FrameCrypto (below) to explicitly convert between EncryptedFrames and
+// EncodedFrames.
+struct EncryptedFrame : public EncodedFrame {
+  EncryptedFrame();
+  ~EncryptedFrame();
+  EncryptedFrame(EncryptedFrame&&) noexcept;
+  EncryptedFrame& operator=(EncryptedFrame&&);
+
+ protected:
+  // Since only FrameCrypto is trusted to generate the
+  // payload data, it is allowed direct access to the storage.
+  friend class FrameCrypto;
+
+  // Note: EncodedFrame::data must be updated whenever any mutations are
+  // performed on this member!
+  std::vector<uint8_t> owned_data_;
+};
+
+// Encrypts EncodedFrames before sending, or decrypts EncryptedFrames that have
+// been received.
+class FrameCrypto {
+ public:
+  using ChunkList = std::span<const ByteView>;
+
+  // Construct with the given 16-bytes AES key and IV mask. Both arguments
+  // should be randomly-generated for each new streaming session.
+  // GenerateRandomBytes() can be used to create them.
+  FrameCrypto(const std::array<uint8_t, 16>& aes_key,
+              const std::array<uint8_t, 16>& cast_iv_mask);
+
+  ~FrameCrypto();
+
+  EncryptedFrame Encrypt(const EncodedFrame& encoded_frame) const;
+
+  // Decrypts `chunks` into `out`. `out` must have a sufficiently-sized
+  // data buffer.
+  void Decrypt(FrameId frame_id, ChunkList chunks, ByteBuffer out) const;
+
+ private:
+  // The 244-byte AES_KEY struct, derived from the `aes_key` passed to the ctor,
+  // and initialized by boringssl's AES_set_encrypt_key() function.
+  const AES_KEY aes_key_;
+
+  // Random bytes used in the custom heuristic to generate a different
+  // initialization vector for each frame.
+  const std::array<uint8_t, 16> cast_iv_mask_;
+
+  // AES-CTR is symmetric. Thus, the "meat" of both Encrypt() and Decrypt() is
+  // the same.
+  void Crypt(FrameId frame_id, ChunkList chunks, ByteBuffer out) const;
+};
+
+}  // namespace openscreen::cast
+
+#endif  // CAST_STREAMING_IMPL_FRAME_CRYPTO_H_

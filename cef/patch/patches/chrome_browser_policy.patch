@@ -1,0 +1,460 @@
+diff --git chrome/browser/policy/BUILD.gn chrome/browser/policy/BUILD.gn
+index 37f74d0fdbb6bf9eb0fd95ffb6d13c89e9a8a6f0..713c3728e501e0f0c8b14b0dc07d566d8fe99dae 100644
+--- chrome/browser/policy/BUILD.gn
++++ chrome/browser/policy/BUILD.gn
+@@ -27,6 +27,7 @@ source_set("path_parser") {
+     "//base",
+     "//chrome/common:constants",
+     "//components/policy:generated",
++    "//components/strings:components_strings",
+   ]
+ 
+   if (is_mac) {
+diff --git chrome/browser/policy/browser_dm_token_storage_linux.cc chrome/browser/policy/browser_dm_token_storage_linux.cc
+index a7a7a3a167bce56952b713f2e7987de34ed37c16..432a0c418a54ed7fa1f65e894d0fcec71ea27f35 100644
+--- chrome/browser/policy/browser_dm_token_storage_linux.cc
++++ chrome/browser/policy/browser_dm_token_storage_linux.cc
+@@ -22,6 +22,7 @@
+ #include "base/task/task_traits.h"
+ #include "base/task/thread_pool.h"
+ #include "base/threading/scoped_blocking_call.h"
++#include "chrome/browser/policy/chrome_browser_policy_connector.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "components/policy/core/common/policy_logger.h"
+ #include "crypto/obsolete/sha1.h"
+@@ -137,8 +138,8 @@ std::string BrowserDMTokenStorageLinux::InitEnrollmentToken() {
+   std::string enrollment_token;
+   base::FilePath dir_policy_files_path;
+ 
+-  if (!base::PathService::Get(chrome::DIR_POLICY_FILES,
+-                              &dir_policy_files_path)) {
++  if (!ChromeBrowserPolicyConnector::GetDirPolicyFilesPath(
++          &dir_policy_files_path)) {
+     return std::string();
+   }
+ 
+@@ -175,8 +176,8 @@ bool BrowserDMTokenStorageLinux::InitEnrollmentErrorOption() {
+   std::string options;
+   base::FilePath dir_policy_files_path;
+ 
+-  if (!base::PathService::Get(chrome::DIR_POLICY_FILES,
+-                              &dir_policy_files_path)) {
++  if (!ChromeBrowserPolicyConnector::GetDirPolicyFilesPath(
++          &dir_policy_files_path)) {
+     return false;
+   }
+ 
+diff --git chrome/browser/policy/browser_dm_token_storage_mac.mm chrome/browser/policy/browser_dm_token_storage_mac.mm
+index 0c39d3482ad535fbaf791d5486a850d7b19a0dc0..766216b44000ce75a43a1ca919b1ddff7e4ac01a 100644
+--- chrome/browser/policy/browser_dm_token_storage_mac.mm
++++ chrome/browser/policy/browser_dm_token_storage_mac.mm
+@@ -26,6 +26,7 @@
+ #include "base/syslog_logging.h"
+ #include "base/task/thread_pool.h"
+ #include "base/threading/scoped_blocking_call.h"
++#include "chrome/browser/policy/chrome_browser_policy_connector.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "components/policy/core/common/policy_logger.h"
+ #include "crypto/obsolete/sha1.h"
+@@ -56,11 +57,6 @@ const char kEnrollmentOptionsFilePath[] = FILE_PATH_LITERAL(
+     "/Library/Google/Chrome/CloudManagementEnrollmentOptions");
+ const char kEnrollmentMandatoryOption[] = "Mandatory";
+ 
+-// Explicitly access the "com.google.Chrome" bundle ID, no matter what this
+-// app's bundle ID actually is. All channels of Chrome should obey the same
+-// policies.
+-const CFStringRef kBundleId = CFSTR("com.google.Chrome");
+-
+ constexpr char kEnrollmentTokenMetricsName[] =
+     "Enterprise.CloudManagementEnrollmentTokenLocation.Mac";
+ 
+@@ -118,16 +114,23 @@ bool DeleteDMTokenFromAppDataDir(const std::string& client_id) {
+ // Get the enrollment token from policy file: /Library/com.google.Chrome.plist.
+ // Return true if policy is set, otherwise false.
+ bool GetEnrollmentTokenFromPolicy(std::string* enrollment_token) {
++  base::apple::ScopedCFTypeRef<CFStringRef> bundle_id_scoper(
++      ChromeBrowserPolicyConnector::GetBundleId());
++  CFStringRef bundle_id = bundle_id_scoper.get();
++  if (!bundle_id) {
++    return false;
++  }
++
+   // Since the configuration management infrastructure is not initialized when
+   // this code runs, read the policy preference directly.
+   base::apple::ScopedCFTypeRef<CFPropertyListRef> value(
+-      CFPreferencesCopyAppValue(kEnrollmentTokenPolicyName, kBundleId));
++      CFPreferencesCopyAppValue(kEnrollmentTokenPolicyName, bundle_id));
+ 
+   // Read the enrollment token from the new location. If that fails, try the old
+   // location (which will be deprecated soon). If that also fails, bail as there
+   // is no token set.
+   if (!value ||
+-      !CFPreferencesAppValueIsForced(kEnrollmentTokenPolicyName, kBundleId)) {
++      !CFPreferencesAppValueIsForced(kEnrollmentTokenPolicyName, bundle_id)) {
+     return false;
+   }
+   CFStringRef value_string = base::apple::CFCast<CFStringRef>(value.get());
+@@ -153,12 +156,19 @@ bool GetEnrollmentTokenFromFile(std::string* enrollment_token) {
+ }
+ 
+ std::optional<bool> IsEnrollmentMandatoryByPolicy() {
++  base::apple::ScopedCFTypeRef<CFStringRef> bundle_id_scoper(
++      ChromeBrowserPolicyConnector::GetBundleId());
++  CFStringRef bundle_id = bundle_id_scoper.get();
++  if (!bundle_id) {
++    return std::optional<bool>();
++  }
++
+   base::apple::ScopedCFTypeRef<CFPropertyListRef> value(
+       CFPreferencesCopyAppValue(kEnrollmentMandatoryOptionPolicyName,
+-                                kBundleId));
++                                bundle_id));
+ 
+   if (!value || !CFPreferencesAppValueIsForced(
+-                    kEnrollmentMandatoryOptionPolicyName, kBundleId)) {
++                    kEnrollmentMandatoryOptionPolicyName, bundle_id)) {
+     return std::optional<bool>();
+   }
+ 
+diff --git chrome/browser/policy/chrome_browser_policy_connector.cc chrome/browser/policy/chrome_browser_policy_connector.cc
+index e8799e94462e5fd75d84128badb7e61711cc3787..45ea9c784a08e5905e704eb606c2fbab54aecca4 100644
+--- chrome/browser/policy/chrome_browser_policy_connector.cc
++++ chrome/browser/policy/chrome_browser_policy_connector.cc
+@@ -12,10 +12,13 @@
+ #include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
++#include "base/no_destructor.h"
+ #include "base/path_service.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "base/task/thread_pool.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
+ #include "chrome/browser/policy/configuration_policy_handler_list_factory.h"
+@@ -71,6 +74,11 @@
+ namespace policy {
+ namespace {
+ bool g_command_line_enabled_for_testing = false;
++
++std::string* PlatformPolicyId() {
++  static base::NoDestructor<std::string> id;
++  return id.get();
++}
+ }  // namespace
+ 
+ ChromeBrowserPolicyConnector::ChromeBrowserPolicyConnector()
+@@ -253,6 +261,73 @@ void ChromeBrowserPolicyConnector::EnableCommandLineSupportForTesting() {
+   g_command_line_enabled_for_testing = true;
+ }
+ 
++// static
++void ChromeBrowserPolicyConnector::EnablePlatformPolicySupport(
++    const std::string& id) {
++  *PlatformPolicyId() = id;
++}
++
++#if BUILDFLAG(IS_WIN)
++
++// static
++std::wstring ChromeBrowserPolicyConnector::GetPolicyKey() {
++#if BUILDFLAG(ENABLE_CEF)
++  const std::string& policy_id = *PlatformPolicyId();
++  if (!policy_id.empty()) {
++    return base::UTF8ToWide(policy_id);
++  }
++  return std::wstring();
++#else
++  return kRegistryChromePolicyKey;
++#endif
++}
++
++#elif BUILDFLAG(IS_MAC)
++
++// static
++base::apple::ScopedCFTypeRef<CFStringRef>
++ChromeBrowserPolicyConnector::GetBundleId() {
++#if BUILDFLAG(ENABLE_CEF)
++  const std::string& policy_id = *PlatformPolicyId();
++  if (policy_id.empty()) {
++    return base::apple::ScopedCFTypeRef<CFStringRef>();
++  }
++
++  return base::SysUTF8ToCFStringRef(policy_id);
++#elif BUILDFLAG(GOOGLE_CHROME_BRANDING)
++  // Explicitly access the "com.google.Chrome" bundle ID, no matter what this
++  // app's bundle ID actually is. All channels of Chrome should obey the same
++  // policies.
++  return CFSTR("com.google.Chrome");
++#else
++  return base::SysUTF8ToCFStringRef(base::apple::BaseBundleID());
++#endif
++}
++
++#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
++
++// static
++bool ChromeBrowserPolicyConnector::GetDirPolicyFilesPath(base::FilePath* path) {
++#if BUILDFLAG(ENABLE_CEF)
++  const std::string& policy_id = *PlatformPolicyId();
++  if (policy_id.empty()) {
++    return false;
++  }
++
++  base::FilePath policy_path(policy_id);
++  if (!policy_path.IsAbsolute()) {
++    return false;
++  }
++
++  *path = policy_path;
++  return true;
++#else
++  return base::PathService::Get(chrome::DIR_POLICY_FILES, path);
++#endif
++}
++
++#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
++
+ base::flat_set<std::string>
+ ChromeBrowserPolicyConnector::device_affiliation_ids() const {
+   if (!device_affiliation_ids_for_testing_.empty()) {
+@@ -316,25 +391,22 @@ ChromeBrowserPolicyConnector::CreatePolicyProviders() {
+ std::unique_ptr<ConfigurationPolicyProvider>
+ ChromeBrowserPolicyConnector::CreatePlatformProvider() {
+ #if BUILDFLAG(IS_WIN)
++  const std::wstring policy_key = GetPolicyKey();
++  if (policy_key.empty()) {
++    return nullptr;
++  }
+   std::unique_ptr<AsyncPolicyLoader> loader(PolicyLoaderWin::Create(
+       base::ThreadPool::CreateSequencedTaskRunner(
+           {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),
+-      ManagementServiceFactory::GetForPlatform(), kRegistryChromePolicyKey));
++      ManagementServiceFactory::GetForPlatform(), policy_key));
+   return std::make_unique<AsyncPolicyProvider>(GetSchemaRegistry(),
+                                                std::move(loader));
+ #elif BUILDFLAG(IS_MAC)
+-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+-  // Explicitly watch the "com.google.Chrome" bundle ID, no matter what this
+-  // app's bundle ID actually is. All channels of Chrome should obey the same
+-  // policies.
+-  CFStringRef bundle_id = CFSTR("com.google.Chrome");
+-#elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
+-  CFStringRef bundle_id = CFSTR("com.google.ChromeForTesting");
+-#else
+-  base::apple::ScopedCFTypeRef<CFStringRef> bundle_id_scoper =
+-      base::SysUTF8ToCFStringRef(base::apple::BaseBundleID());
++  base::apple::ScopedCFTypeRef<CFStringRef> bundle_id_scoper(GetBundleId());
+   CFStringRef bundle_id = bundle_id_scoper.get();
+-#endif
++  if (!bundle_id) {
++    return nullptr;
++  }
+   auto loader = std::make_unique<PolicyLoaderMac>(
+       base::ThreadPool::CreateSequencedTaskRunner(
+           {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),
+@@ -345,7 +417,7 @@ ChromeBrowserPolicyConnector::CreatePlatformProvider() {
+                                                std::move(loader));
+ #elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+   base::FilePath config_dir_path;
+-  if (base::PathService::Get(chrome::DIR_POLICY_FILES, &config_dir_path)) {
++  if (GetDirPolicyFilesPath(&config_dir_path)) {
+     auto loader = std::make_unique<ConfigDirPolicyLoader>(
+         base::ThreadPool::CreateSequencedTaskRunner(
+             {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),
+diff --git chrome/browser/policy/chrome_browser_policy_connector.h chrome/browser/policy/chrome_browser_policy_connector.h
+index c6556171f4e2950b6818f80f7092777aa0a6e042..b68145aef9534b9e62b16fe509a1b0f602855db2 100644
+--- chrome/browser/policy/chrome_browser_policy_connector.h
++++ chrome/browser/policy/chrome_browser_policy_connector.h
+@@ -22,6 +22,10 @@
+ #include "components/policy/core/browser/android/policy_cache_updater_android.h"
+ #endif
+ 
++#if BUILDFLAG(IS_MAC)
++#include "base/apple/scoped_cftyperef.h"
++#endif
++
+ class PrefService;
+ 
+ namespace policy {
+@@ -127,6 +131,25 @@ class ChromeBrowserPolicyConnector : public BrowserPolicyConnector {
+ 
+   static void EnableCommandLineSupportForTesting();
+ 
++  // Enable platform policy support with the specified retrieval |id|. Support
++  // is disabled by default, and if |id| is empty.
++  // On Windows, this is a registry key like "SOFTWARE\\Policies\\Google\\Chrome".
++  // On MacOS, this is a bundle ID like "com.google.Chrome".
++  // On Linux, this is a directory path like "/etc/opt/chrome/policies".
++  static void EnablePlatformPolicySupport(const std::string& id);
++
++  // Platform-specific retrieval of the policy ID value.
++#if BUILDFLAG(IS_WIN)
++  // Replaces all direct usage of kRegistryChromePolicyKey.
++  static std::wstring GetPolicyKey();
++#elif BUILDFLAG(IS_MAC)
++  // Replaces all direct usage of CFSTR("com.google.Chrome").
++  static base::apple::ScopedCFTypeRef<CFStringRef> GetBundleId();
++#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
++  // Replaces all direct usage of chrome::DIR_POLICY_FILES.
++  static bool GetDirPolicyFilesPath(base::FilePath* path);
++#endif
++
+   virtual base::flat_set<std::string> device_affiliation_ids() const;
+   void SetDeviceAffiliatedIdsForTesting(
+       const base::flat_set<std::string>& device_affiliation_ids);
+diff --git chrome/browser/policy/policy_path_parser_mac.mm chrome/browser/policy/policy_path_parser_mac.mm
+index 1a2e78c3472ec065410699503d9695fdb21dd716..5d1bd95a15113471c01854b478570fbdd688b6b6 100644
+--- chrome/browser/policy/policy_path_parser_mac.mm
++++ chrome/browser/policy/policy_path_parser_mac.mm
+@@ -16,6 +16,7 @@
+ #include "base/logging.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "build/branding_buildflags.h"
++#include "chrome/browser/policy/chrome_browser_policy_connector.h"
+ #include "components/policy/policy_constants.h"
+ 
+ namespace policy::path_parser {
+@@ -97,16 +98,12 @@ base::FilePath::StringType ExpandPathVariables(
+ void CheckUserDataDirPolicy(base::FilePath* user_data_dir) {
+   // Since the configuration management infrastructure is not initialized when
+   // this code runs, read the policy preference directly.
+-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+-  // Explicitly access the "com.google.Chrome" bundle ID, no matter what this
+-  // app's bundle ID actually is. All channels of Chrome should obey the same
+-  // policies.
+-  CFStringRef bundle_id = CFSTR("com.google.Chrome");
+-#else
+   base::apple::ScopedCFTypeRef<CFStringRef> bundle_id_scoper =
+-      base::SysUTF8ToCFStringRef(base::apple::BaseBundleID());
++      policy::ChromeBrowserPolicyConnector::GetBundleId();
+   CFStringRef bundle_id = bundle_id_scoper.get();
+-#endif
++  if (!bundle_id) {
++    return;
++  }
+ 
+   base::apple::ScopedCFTypeRef<CFStringRef> key =
+       base::SysUTF8ToCFStringRef(policy::key::kUserDataDir);
+diff --git chrome/browser/policy/policy_path_parser_win.cc chrome/browser/policy/policy_path_parser_win.cc
+index 8dbf958c189ddbbf1b6271b0215c796a992d694c..6eaccc6688eca9d6c00d4f746df7e42998b18f74 100644
+--- chrome/browser/policy/policy_path_parser_win.cc
++++ chrome/browser/policy/policy_path_parser_win.cc
+@@ -12,6 +12,7 @@
+ 
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/win/registry.h"
++#include "chrome/browser/policy/chrome_browser_policy_connector.h"
+ #include "chrome/common/chrome_switches.h"
+ #include "chrome/install_static/policy_path_parser.h"
+ #include "components/policy/policy_constants.h"
+@@ -22,9 +23,15 @@ namespace {
+ bool LoadUserDataDirPolicyFromRegistry(HKEY hive,
+                                        const char* key_name_str,
+                                        base::FilePath* dir) {
++  const std::wstring policy_key =
++      policy::ChromeBrowserPolicyConnector::GetPolicyKey();
++  if (policy_key.empty()) {
++    return false;
++  }
++
+   std::wstring value;
+   std::wstring key_name(base::ASCIIToWide(key_name_str));
+-  base::win::RegKey key(hive, policy::kRegistryChromePolicyKey, KEY_READ);
++  base::win::RegKey key(hive, policy_key.c_str(), KEY_READ);
+   if (key.ReadValue(key_name.c_str(), &value) == ERROR_SUCCESS) {
+     *dir = base::FilePath(policy::path_parser::ExpandPathVariables(value));
+     return true;
+diff --git chrome/common/chrome_paths.cc chrome/common/chrome_paths.cc
+index eae95c5f35740f6d72fbdd26b74d6726f6bf29d2..38b73caa7080835bc749623b96f034d394fe1a09 100644
+--- chrome/common/chrome_paths.cc
++++ chrome/common/chrome_paths.cc
+@@ -405,7 +405,8 @@ bool PathProvider(int key, base::FilePath* result) {
+       break;
+     }
+ #endif
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_OPENBSD)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_OPENBSD) && \
++    !BUILDFLAG(ENABLE_CEF)
+     case chrome::DIR_POLICY_FILES: {
+       cur = base::FilePath(policy::kPolicyPath);
+       break;
+diff --git chrome/common/chrome_paths.h chrome/common/chrome_paths.h
+index 01ac4e4c83af8d7e1009dbd97ddb9c34fbfde916..24c4839c930012cf34f8c9b8ca5354dfecb3fdc1 100644
+--- chrome/common/chrome_paths.h
++++ chrome/common/chrome_paths.h
+@@ -7,6 +7,7 @@
+ 
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
++#include "cef/libcef/features/features.h"
+ #include "extensions/buildflags/buildflags.h"
+ #include "third_party/widevine/cdm/buildflags.h"
+ 
+@@ -49,7 +50,7 @@ enum {
+ #if BUILDFLAG(IS_MAC)
+   DIR_OUTER_BUNDLE,  // Directory that is the outermost Chromium bundle.
+ #endif
+-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(ENABLE_CEF)
+   DIR_POLICY_FILES,  // Directory for system-wide read-only
+                      // policy files that allow sys-admins
+                      // to set policies for chrome. This directory
+diff --git components/policy/BUILD.gn components/policy/BUILD.gn
+index fd95e68ece8c0e6ddba269a407f47e176a44adbd..33612537eb7438cdcb9938cd3d70f95f21ee5b20 100644
+--- components/policy/BUILD.gn
++++ components/policy/BUILD.gn
+@@ -266,6 +266,7 @@ static_library("generated") {
+     ":cloud_policy_proto_generated_compile",
+     ":policy_code_generate",
+     "//base",
++    "//cef/libcef/features:buildflags",
+     "//components/policy/core/common:common_constants",
+     "//components/policy/proto:policy_common_definitions_compile_proto",
+     "//third_party/protobuf:protobuf_lite",
+diff --git components/policy/tools/generate_policy_source.py components/policy/tools/generate_policy_source.py
+index 775a99a25a9dcf26171f711bff09b356da5c5c81..8800b79bbcf69da3dfd5175e7194bc7cef7eb7a2 100755
+--- components/policy/tools/generate_policy_source.py
++++ components/policy/tools/generate_policy_source.py
+@@ -484,6 +484,7 @@ def _WritePolicyConstantHeader(all_policies, policy_atomic_groups,
+ #include <cstdint>
+ #include <string>
+ 
++#include "cef/libcef/features/features.h"
+ #include "components/policy/core/common/policy_details.h"
+ #include "components/policy/core/common/policy_map.h"
+ 
+@@ -506,9 +507,11 @@ namespace {namespace} {{
+ ''')
+ 
+   if target_platform == 'win':
+-    f.write('// The windows registry path where Chrome policy '
++    f.write('#if !BUILDFLAG(ENABLE_CEF)\n'
++            '// The windows registry path where Chrome policy '
+             'configuration resides.\n'
+-            'extern const wchar_t kRegistryChromePolicyKey[];\n')
++            'extern const wchar_t kRegistryChromePolicyKey[];\n'
++            '#endif\n')
+ 
+   f.write('''#if BUILDFLAG(IS_CHROMEOS)
+ // Sets default profile policies values for enterprise users.
+@@ -1184,7 +1187,8 @@ namespace {namespace} {{
+     f.write('}  // namespace\n\n')
+ 
+   if target_platform == 'win':
+-    f.write('#if BUILDFLAG(GOOGLE_CHROME_BRANDING)\n'
++    f.write('#if !BUILDFLAG(ENABLE_CEF)\n'
++            '#if BUILDFLAG(GOOGLE_CHROME_BRANDING)\n'
+             'const wchar_t kRegistryChromePolicyKey[] = '
+             'L"' + CHROME_POLICY_KEY + '";\n'
+             '#elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)\n'
+@@ -1193,6 +1197,7 @@ namespace {namespace} {{
+             '#else\n'
+             'const wchar_t kRegistryChromePolicyKey[] = '
+             'L"' + CHROMIUM_POLICY_KEY + '";\n'
++            '#endif\n'
+             '#endif\n\n')
+ 
+   # Setting enterprise defaults code generation.

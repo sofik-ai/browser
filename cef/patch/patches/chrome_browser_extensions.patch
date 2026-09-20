@@ -1,0 +1,183 @@
+diff --git chrome/browser/extensions/api/chrome_extensions_api_client.cc chrome/browser/extensions/api/chrome_extensions_api_client.cc
+index 7aa8718b6057e01a6e216171f926aa5b14f78b41..e3930e977b2a031af0033d9f3d5da4c207b80ae4 100644
+--- chrome/browser/extensions/api/chrome_extensions_api_client.cc
++++ chrome/browser/extensions/api/chrome_extensions_api_client.cc
+@@ -16,6 +16,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
+ #include "build/chromeos_buildflags.h"
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/extensions/api/automation_internal/chrome_automation_internal_api_delegate.h"
+ #include "chrome/browser/extensions/api/declarative_content/chrome_content_rules_registry.h"
+ #include "chrome/browser/extensions/api/declarative_content/default_content_predicate_evaluators.h"
+@@ -101,6 +102,10 @@
+ #include "chromeos/ash/components/settings/cros_settings.h"
+ #endif
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/chrome_mime_handler_view_guest_delegate_cef.h"
++#endif
++
+ #if BUILDFLAG(ENABLE_PRINTING)
+ #include "chrome/browser/printing/printing_init.h"
+ #endif
+@@ -354,7 +359,11 @@ ChromeExtensionsAPIClient::CreateGuestViewManagerDelegate() const {
+ std::unique_ptr<MimeHandlerViewGuestDelegate>
+ ChromeExtensionsAPIClient::CreateMimeHandlerViewGuestDelegate(
+     MimeHandlerViewGuest* guest) const {
++#if BUILDFLAG(ENABLE_CEF)
++  return std::make_unique<ChromeMimeHandlerViewGuestDelegateCef>(guest);
++#else
+   return std::make_unique<ChromeMimeHandlerViewGuestDelegate>();
++#endif
+ }
+ #endif
+ 
+diff --git chrome/browser/extensions/api/tabs/tabs_api.cc chrome/browser/extensions/api/tabs/tabs_api.cc
+index e1da67df779288906dca6f0e5b88cce00b41f6a6..2ff8bfbc436a3d2a2f3de2225fe017d2c5146ac3 100644
+--- chrome/browser/extensions/api/tabs/tabs_api.cc
++++ chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -2529,31 +2529,31 @@ ExtensionFunction::ResponseAction TabsUpdateFunction::Run() {
+   }
+ 
+   // tabs_internal::GetTabById may return a null window for prerender tabs.
+-  if (!window || !ExtensionTabUtil::BrowserSupportsTabs(
+-                     window->GetBrowserWindowInterface())) {
+-    return RespondNow(Error(ExtensionTabUtil::kNoCurrentWindowError));
+-  }
++  TabListInterface* tab_list = nullptr;
++  ::tabs::TabInterface* target_tab = nullptr;
++  if (window && ExtensionTabUtil::BrowserSupportsTabs(
++                    window->GetBrowserWindowInterface())) {
++    tab_list = TabListInterface::From(window->GetBrowserWindowInterface());
++    CHECK(tab_list);
+ 
+-  // Cache the original web contents.
+-  content::WebContents* original_contents = contents;
++    // Update the active (aka selected) tab.
++    if (!UpdateActiveTab(*params, *window->profile(),
++                         *window->GetBrowserWindowInterface(), *tab_list,
++                         tab_index, error)) {
++      return RespondNow(Error(std::move(error)));
++    }
+ 
+-  // Update the active (aka selected) tab.
+-  TabListInterface* tab_list =
+-      TabListInterface::From(window->GetBrowserWindowInterface());
+-  CHECK(tab_list);
+-  if (!UpdateActiveTab(*params, *window->profile(),
+-                       *window->GetBrowserWindowInterface(), *tab_list,
+-                       tab_index, error)) {
+-    return RespondNow(Error(std::move(error)));
++    // Update the highlighted tab.
++    target_tab = tab_list->GetTab(tab_index);
++    CHECK(target_tab);
++    if (!UpdateHighlightedTab(*params, *window->profile(), *tab_list,
++                              *target_tab, error)) {
++      return RespondNow(Error(std::move(error)));
++    }
+   }
+ 
+-  // Update the highlighted tab.
+-  ::tabs::TabInterface* target_tab = tab_list->GetTab(tab_index);
+-  CHECK(target_tab);
+-  if (!UpdateHighlightedTab(*params, *window->profile(), *tab_list, *target_tab,
+-                            error)) {
+-    return RespondNow(Error(std::move(error)));
+-  }
++  // Cache the original web contents.
++  content::WebContents* original_contents = contents;
+ 
+   if (params->update_properties.muted &&
+       !SetTabAudioMuted(contents, *params->update_properties.muted,
+@@ -2594,7 +2594,7 @@ ExtensionFunction::ResponseAction TabsUpdateFunction::Run() {
+   }
+ #endif
+ 
+-  if (params->update_properties.pinned) {
++  if (target_tab && params->update_properties.pinned) {
+     bool pinned = *params->update_properties.pinned;
+ 
+     if (target_tab->IsPinned() != pinned) {
+@@ -2624,7 +2624,8 @@ ExtensionFunction::ResponseAction TabsUpdateFunction::Run() {
+   // Navigate the tab to a new location if the url is different.
+   if (params->update_properties.url) {
+     std::string updated_url = *params->update_properties.url;
+-    if (window->profile()->IsIncognitoProfile() &&
++    auto* profile = Profile::FromBrowserContext(browser_context());
++    if (profile->IsIncognitoProfile() &&
+         !IsURLAllowedInIncognito(GURL(updated_url))) {
+       return RespondNow(Error(ErrorUtils::FormatErrorMessage(
+           tabs_constants::kURLsNotAllowedInIncognitoError, updated_url)));
+diff --git chrome/browser/extensions/extension_tab_util.cc chrome/browser/extensions/extension_tab_util.cc
+index b87b0c9e6938fcbe79e8394afe5328e7def7b45e..f088568cf8e77a0ec67f38af253536e3a25eb765 100644
+--- chrome/browser/extensions/extension_tab_util.cc
++++ chrome/browser/extensions/extension_tab_util.cc
+@@ -70,6 +70,7 @@
+ #include "chrome/browser/ui/android/tab_model/tab_model.h"
+ #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+ #else
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+ #include "chrome/browser/ui/browser.h"                             // nogncheck
+ #include "chrome/browser/ui/browser_finder.h"                      // nogncheck
+@@ -87,6 +88,10 @@
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/chrome_extension_util.h"
++#endif
++
+ using content::NavigationEntry;
+ using content::WebContents;
+ using extensions::mojom::APIPermissionID;
+@@ -666,6 +671,14 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
+     }
+   }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  if (cef::GetAlloyTabById(tab_id, profile, include_incognito, out_contents)) {
++    // |out_window| and |out_tab_index| are tied to a specific Browser window,
++    // which doesn't exist for an Alloy style browser.
++    return true;
++  }
++#endif
++
+   // Prerendering tab is not visible and it cannot be in `TabStripModel`, if the
+   // tab id exists as a prerendering tab, and the API will returns
+   // `api::tabs::TAB_INDEX_NONE` for `out_tab_index` and a valid `WebContents`.
+diff --git chrome/browser/ui/tab_helpers.h chrome/browser/ui/tab_helpers.h
+index ec26ac19c07801af29e8f755fcbc9f71be17dee1..928536d17dbb15cee42aacc2bac5a57576514109 100644
+--- chrome/browser/ui/tab_helpers.h
++++ chrome/browser/ui/tab_helpers.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_TAB_HELPERS_H_
+ 
+ #include "build/build_config.h"
++#include "cef/libcef/features/features.h"
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ 
+@@ -41,6 +42,10 @@ namespace tabs {
+ class TabModel;
+ }  // namespace tabs
+ 
++#if BUILDFLAG(ENABLE_CEF)
++class CefBrowserPlatformDelegateAlloy;
++#endif
++
+ // A "tab contents" is a WebContents that is used as a tab in a browser window
+ // (or the equivalent on Android). The TabHelpers class allows specific classes
+ // to attach the set of tab helpers that is used for tab contents.
+@@ -80,6 +85,10 @@ class TabHelpers {
+   // Link Preview shows a preview of a page, then promote it as a new tab.
+   friend class PreviewTab;
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  friend class CefBrowserPlatformDelegateAlloy;
++#endif
++
+   // FYI: Do NOT add any more friends here. The functions above are the ONLY
+   // ones that need to call AttachTabHelpers; if you think you do, re-read the
+   // design document linked above, especially the section "Reusing tab helpers".

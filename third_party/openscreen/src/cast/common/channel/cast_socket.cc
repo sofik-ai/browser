@@ -1,0 +1,94 @@
+// Copyright 2019 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "cast/common/public/cast_socket.h"
+
+#include <ostream>
+
+#include "cast/common/channel/message_framer.h"
+#include "cast/common/channel/message_util.h"
+#include "cast/common/channel/proto/cast_channel.pb.h"
+#include "platform/base/span.h"
+#include "util/osp_logging.h"
+
+namespace openscreen::cast {
+
+using message_serialization::DeserializeResult;
+using proto::CastMessage;
+
+CastSocket::Client::~Client() = default;
+
+CastSocket::CastSocket(std::unique_ptr<Connection> connection, Client* client)
+    : connection_(std::move(connection)),
+      client_(client),
+      socket_id_(g_next_socket_id_++) {
+  OSP_CHECK(client);
+  connection_->SetClient(this);
+}
+
+CastSocket::~CastSocket() {
+  connection_->SetClient(nullptr);
+}
+
+Error CastSocket::Send(const CastMessage& message) {
+  OSP_DVLOG << __func__ << ": sending a message. " << ToString(message);
+  if (state_ == State::kError) {
+    return Error::Code::kSocketClosedFailure;
+  }
+
+  const ErrorOr<std::vector<uint8_t>> out =
+      message_serialization::Serialize(message);
+  if (!out) {
+    return out.error();
+  }
+
+  if (!connection_->Send(out.value())) {
+    return Error::Code::kAgain;
+  }
+  return Error::Code::kNone;
+}
+
+void CastSocket::SetClient(Client* client) {
+  OSP_CHECK(client);
+  client_ = client;
+}
+
+std::array<uint8_t, 2> CastSocket::GetSanitizedIpAddress() {
+  std::array<uint8_t, 2> result;
+  IPEndpoint remote = connection_->GetRemoteEndpoint();
+  std::span<const uint8_t> bytes = remote.address.bytes().last<2>();
+  std::copy(bytes.begin(), bytes.end(), result.begin());
+  return result;
+}
+
+void CastSocket::OnError(Connection* connection, const Error& error) {
+  state_ = State::kError;
+  client_->OnError(this, error);
+}
+
+void CastSocket::OnRead(Connection* connection, std::vector<uint8_t> block) {
+  read_buffer_.insert(read_buffer_.end(), block.begin(), block.end());
+  // NOTE: Read as many messages as possible out of `read_buffer_` since we only
+  // get one callback opportunity for this.
+  do {
+    ErrorOr<DeserializeResult> message_or_error =
+        message_serialization::TryDeserialize(
+            ByteBuffer(&read_buffer_[0], read_buffer_.size()));
+    if (!message_or_error) {
+      OSP_DLOG_ERROR << __func__ << ": failed to deserialize a message. "
+                     << message_or_error.error();
+      return;
+    }
+    OSP_DVLOG << __func__ << ": read a message. "
+              << ToString(message_or_error.value().message);
+
+    read_buffer_.erase(read_buffer_.begin(),
+                       read_buffer_.begin() + message_or_error.value().length);
+    client_->OnMessage(this, std::move(message_or_error.value().message));
+  } while (!read_buffer_.empty());
+}
+
+int CastSocket::g_next_socket_id_ = 1;
+
+}  // namespace openscreen::cast

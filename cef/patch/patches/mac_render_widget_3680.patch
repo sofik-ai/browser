@@ -1,0 +1,34 @@
+diff --git content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
+index bdc30e36d46374d101b88a8d6717a93fbf22384f..8a4d3cbde248031220a4095c05a56f980c5cd0a2 100644
+--- content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
++++ content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
+@@ -181,6 +181,13 @@ void ExtractUnderlines(NSAttributedString* string,
+ 
+ // RenderWidgetHostViewCocoa ---------------------------------------------------
+ 
++@interface NSWindow (CefCustomMethods)
++- (int)acceptsFirstMouse;
++@end
++
++constexpr int kStateEnabled = 1;
++constexpr int kStateDisabled = 2;
++
+ // Private methods:
+ @interface RenderWidgetHostViewCocoa ()
+ 
+@@ -800,6 +807,15 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ }
+ 
+ - (BOOL)acceptsFirstMouse:(NSEvent*)theEvent {
++  if ([self.window respondsToSelector:@selector(acceptsFirstMouse)]) {
++    const auto mode = [self.window acceptsFirstMouse];
++    if (mode == kStateEnabled) {
++      return YES;
++    } else if (mode == kStateDisabled) {
++      return NO;
++    }
++  }
++
+   // Enable "click-through" if mouse clicks are accepted in inactive windows.
+   return
+       [self acceptsMouseEventsOption] > AcceptMouseEvents::kWhenInActiveWindow;

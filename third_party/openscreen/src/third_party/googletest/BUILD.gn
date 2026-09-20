@@ -1,0 +1,87 @@
+# Copyright 2018 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build_overrides/build.gni")
+
+if (build_with_chromium) {
+  source_set("gmock") {
+    testonly = true
+    public_deps = [ "//third_party/googletest:gmock" ]
+  }
+
+  source_set("gtest") {
+    testonly = true
+    public_deps = [ "//third_party/googletest:gtest" ]
+  }
+
+  source_set("gtest_main") {
+    testonly = true
+    public_deps = [ "//third_party/googletest:gtest_main" ]
+  }
+} else {
+  config("gmock_config") {
+    visibility = [ ":*" ]
+    include_dirs = [ "src/googlemock/include" ]
+  }
+
+  config("gmock_warnings") {
+    visibility = [ ":*" ]
+    cflags_cc = []
+    if (is_clang) {
+      cflags_cc += [ "-Wno-sign-compare" ]
+    }
+  }
+
+  config("gtest_config") {
+    visibility = [ ":*" ]
+    include_dirs = [ "src/googletest/include" ]
+  }
+
+  config("gtest_warnings") {
+    visibility = [ ":*" ]
+    cflags_cc = []
+
+    if (is_win) {
+      cflags_cc += [ "-Wno-sign-compare" ]
+    }
+  }
+
+  source_set("gmock") {
+    testonly = true
+    sources = [
+      "src/googlemock/include/gmock/gmock.h",
+      "src/googlemock/src/gmock-all.cc",
+    ]
+
+    public_configs = [
+      ":gmock_config",
+      ":gtest_config",
+    ]
+    configs += [
+      ":gmock_warnings",
+      ":gtest_warnings",
+    ]
+
+    public_deps = [ ":gtest" ]
+    include_dirs = [ "src/googlemock" ]
+  }
+
+  source_set("gtest") {
+    testonly = true
+    sources = [
+      "src/googletest/include/gtest/gtest.h",
+      "src/googletest/src/gtest-all.cc",
+    ]
+
+    public_configs = [ ":gtest_config" ]
+    configs += [ ":gtest_warnings" ]
+    include_dirs = [ "src/googletest" ]
+  }
+
+  source_set("gtest_main") {
+    testonly = true
+    sources = [ "src/googletest/src/gtest_main.cc" ]
+    deps = [ ":gtest" ]
+  }
+}

@@ -1,0 +1,52 @@
+diff --git chrome/browser/printing/printer_query.cc chrome/browser/printing/printer_query.cc
+index 2a477e820d9f0126a05f86cd44f02c2189275bad..775cc8ec18eada7d0b44dce58a13a03636ebc71f 100644
+--- chrome/browser/printing/printer_query.cc
++++ chrome/browser/printing/printer_query.cc
+@@ -125,6 +125,7 @@ PrinterQuery::PrinterQuery(content::GlobalRenderFrameHostId rfh_id)
+       rfh_id_(rfh_id),
+       cookie_(PrintSettings::NewCookie()) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  printing_context_->set_render_ids(rfh_id.child_id, rfh_id.frame_routing_id);
+ }
+ 
+ PrinterQuery::~PrinterQuery() {
+diff --git printing/printing_context.h printing/printing_context.h
+index 9371b96cdd377501de91a7e201430065b813cc04..8868bcbea4fb52098c5a48f5d59d67791d2ebd9b 100644
+--- printing/printing_context.h
++++ printing/printing_context.h
+@@ -12,6 +12,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#include "content/public/common/child_process_id.h"
+ #include "printing/buildflags/buildflags.h"
+ #include "printing/mojom/print.mojom.h"
+ #include "printing/native_drawing_context.h"
+@@ -217,6 +218,16 @@ class COMPONENT_EXPORT(PRINTING) PrintingContext {
+   void SetJobId(int job_id);
+ #endif
+ 
++  void set_render_ids(content::ChildProcessId render_process_id,
++                      int render_frame_id) {
++    render_process_id_ = render_process_id;
++    render_frame_id_ = render_frame_id;
++  }
++  content::ChildProcessId render_process_id() const {
++    return render_process_id_;
++  }
++  int render_frame_id() const { return render_frame_id_; }
++
+  protected:
+   PrintingContext(Delegate* delegate,
+                   OutOfProcessBehavior out_of_process_behavior);
+@@ -253,6 +264,10 @@ class COMPONENT_EXPORT(PRINTING) PrintingContext {
+   // management.
+   int job_id_ = kNoPrintJobId;
+ 
++  // Routing IDs for the frame that owns this object.
++  content::ChildProcessId render_process_id_;
++  int render_frame_id_ = 0;
++
+  private:
+   const OutOfProcessBehavior out_of_process_behavior_;
+ };

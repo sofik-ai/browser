@@ -1,0 +1,40 @@
+# Copyright 2023 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build_overrides/build.gni")
+
+if (build_with_chromium) {
+  source_set("googleurl") {
+    public_deps = [ "//url" ]
+  }
+} else {
+  import("googleurl_sources.gni")
+
+  config("googleurl_config") {
+    include_dirs = [ "//third_party/googleurl/src" ]
+  }
+
+  config("private_googleurl_config") {
+    cflags = [ "-Wno-return-type" ]
+
+    # Googleurl doesn't properly detect that wchar is utf32.
+    if (is_linux || is_mac) {
+      defines = [ "WCHAR_T_IS_UTF32" ]
+    }
+  }
+
+  source_set("googleurl") {
+    sources = googleurl_sources
+    if (is_win) {
+      sources += googleurl_sources_win
+    } else if (is_posix) {
+      sources += googleurl_sources_posix
+    }
+
+    public_deps = [ "//third_party/abseil" ]
+
+    configs += [ ":private_googleurl_config" ]
+    public_configs = [ ":googleurl_config" ]
+  }
+}

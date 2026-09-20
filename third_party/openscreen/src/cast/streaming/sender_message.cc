@@ -1,0 +1,128 @@
+// Copyright 2020 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "cast/streaming/sender_message.h"
+
+#include <utility>
+#include <variant>
+
+#include "cast/streaming/message_fields.h"
+#include "util/base64.h"
+#include "util/enum_name_table.h"
+#include "util/json/json_helpers.h"
+#include "util/json/json_serialization.h"
+#include "util/string_util.h"
+
+namespace openscreen::cast {
+
+namespace {
+
+EnumNameTable<SenderMessage::Type, 4> kMessageTypeNames{
+    {{kMessageTypeOffer, SenderMessage::Type::kOffer},
+     {"GET_CAPABILITIES", SenderMessage::Type::kGetCapabilities},
+     {"RPC", SenderMessage::Type::kRpc},
+     {"INPUT", SenderMessage::Type::kInput}}};
+
+SenderMessage::Type GetMessageType(const Json::Value& root) {
+  std::string type;
+  if (!json::TryParseString(root[kMessageType], &type)) {
+    return SenderMessage::Type::kUnknown;
+  }
+  string_util::AsciiStrToUpper(type);
+  ErrorOr<SenderMessage::Type> parsed = GetEnum(kMessageTypeNames, type);
+
+  return parsed.value(SenderMessage::Type::kUnknown);
+}
+
+}  // namespace
+
+// static
+ErrorOr<SenderMessage> SenderMessage::Parse(const Json::Value& value) {
+  if (!value.isObject()) {
+    return Error(Error::Code::kParameterInvalid,
+                 "SenderMessage body is not a JSON object");
+  }
+
+  SenderMessage message;
+  if (!json::TryParseInt(value[kSequenceNumber], &(message.sequence_number))) {
+    message.sequence_number = -1;
+  }
+
+  message.type = GetMessageType(value);
+  switch (message.type) {
+    case Type::kOffer: {
+      auto offer_or_error = Offer::TryParse(value[kOfferMessageBody]);
+      if (offer_or_error.is_value()) {
+        message.body = std::move(offer_or_error.value());
+        message.valid = true;
+      }
+    } break;
+
+    case Type::kRpc: {
+      std::string rpc_body;
+      std::vector<uint8_t> rpc;
+      if (json::TryParseString(value[kRpcMessageBody], &rpc_body) &&
+          base64::Decode(rpc_body, &rpc)) {
+        message.body = rpc;
+        message.valid = true;
+      }
+    } break;
+
+    case Type::kInput: {
+      std::string input_body;
+      std::vector<uint8_t> input;
+      if (json::TryParseString(value[kInputMessageBody], &input_body) &&
+          base64::Decode(input_body, &input)) {
+        message.body = input;
+        message.valid = true;
+      }
+    } break;
+
+    case Type::kGetCapabilities:
+      message.valid = true;
+      break;
+
+    default:
+      break;
+  }
+
+  return message;
+}
+
+ErrorOr<Json::Value> SenderMessage::ToJson() const {
+  OSP_CHECK(type != SenderMessage::Type::kUnknown)
+      << "Trying to send an unknown message is a developer error";
+
+  Json::Value root;
+  ErrorOr<const char*> message_type = GetEnumName(kMessageTypeNames, type);
+  root[kMessageType] = message_type.value();
+  if (sequence_number >= 0) {
+    root[kSequenceNumber] = sequence_number;
+  }
+
+  switch (type) {
+    case SenderMessage::Type::kOffer:
+      root[kOfferMessageBody] = std::get<Offer>(body).ToJson();
+      break;
+
+    case SenderMessage::Type::kRpc:
+      root[kRpcMessageBody] =
+          base64::Encode(std::get<std::vector<uint8_t>>(body));
+      break;
+
+    case SenderMessage::Type::kInput:
+      root[kInputMessageBody] =
+          base64::Encode(std::get<std::vector<uint8_t>>(body));
+      break;
+
+    case SenderMessage::Type::kGetCapabilities:
+      break;
+
+    default:
+      OSP_NOTREACHED();
+  }
+  return root;
+}
+
+}  // namespace openscreen::cast

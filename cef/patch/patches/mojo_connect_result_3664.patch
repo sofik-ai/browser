@@ -1,0 +1,458 @@
+diff --git ipc/ipc_mojo_bootstrap.cc ipc/ipc_mojo_bootstrap.cc
+index 9f2a3da3791d311b69dd821841763bd228c0c1ac..8fea8f4f22f88a88eb36fddc43aa18b83577a0aa 100644
+--- ipc/ipc_mojo_bootstrap.cc
++++ ipc/ipc_mojo_bootstrap.cc
+@@ -974,7 +974,8 @@ class ChannelAssociatedGroupController
+           endpoint->disconnect_reason());
+ 
+       base::AutoUnlock unlocker(lock_);
+-      client->NotifyError(reason);
++      // TODO(cef): Route the actual Connector error if/when needed.
++      client->NotifyError(reason, MOJO_RESULT_OK);
+     } else {
+       endpoint->task_runner()->PostTask(
+           FROM_HERE,
+diff --git mojo/public/cpp/bindings/associated_receiver.h mojo/public/cpp/bindings/associated_receiver.h
+index d19e884cfe78486583967f8bc0db7f0e67950382..34080a445b1a0af154f9fdd558c1fd9beec75cb5 100644
+--- mojo/public/cpp/bindings/associated_receiver.h
++++ mojo/public/cpp/bindings/associated_receiver.h
+@@ -48,6 +48,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) AssociatedReceiverBase {
+   void set_disconnect_handler(base::OnceClosure error_handler);
+   void set_disconnect_with_reason_handler(
+       ConnectionErrorWithReasonCallback error_handler);
++  void set_disconnect_with_reason_and_result_handler(
++      ConnectionErrorWithReasonAndResultCallback error_handler);
+   void reset_on_disconnect();
+ 
+   bool is_bound() const { return !!endpoint_client_; }
+@@ -161,6 +163,7 @@ class AssociatedReceiver : public internal::AssociatedReceiverBase {
+   // Like above but when invoked |handler| will receive additional metadata
+   // about why the remote endpoint was closed, if provided.
+   using AssociatedReceiverBase::set_disconnect_with_reason_handler;
++  using AssociatedReceiverBase::set_disconnect_with_reason_and_result_handler;
+ 
+   // Resets this AssociatedReceiver on disconnect. Note that this replaces any
+   // previously set disconnection handler. Must be called on a bound
+diff --git mojo/public/cpp/bindings/associated_remote.h mojo/public/cpp/bindings/associated_remote.h
+index 01391edaac159b032d354c4863e885b7431bdd37..35eb0dd0b9bac011f1c5f60a0b767a3c9f34ff3f 100644
+--- mojo/public/cpp/bindings/associated_remote.h
++++ mojo/public/cpp/bindings/associated_remote.h
+@@ -154,6 +154,11 @@ class AssociatedRemote {
+     internal_state_.set_connection_error_with_reason_handler(
+         std::move(handler));
+   }
++  void set_disconnect_with_reason_and_result_handler(
++      ConnectionErrorWithReasonAndResultCallback handler) {
++    internal_state_.set_connection_error_with_reason_and_result_handler(
++        std::move(handler));
++  }
+ 
+   // A convenient helper that resets this AssociatedRemote on disconnect. Note
+   // that this replaces any previously set disconnection handler. Must be called
+diff --git mojo/public/cpp/bindings/connection_error_callback.h mojo/public/cpp/bindings/connection_error_callback.h
+index ba6d81eaccbb608c89eb4571b564b32f61e49c00..e0542ae97760af7a10aa276656221877da4f53ad 100644
+--- mojo/public/cpp/bindings/connection_error_callback.h
++++ mojo/public/cpp/bindings/connection_error_callback.h
+@@ -6,6 +6,7 @@
+ #define MOJO_PUBLIC_CPP_BINDINGS_CONNECTION_ERROR_CALLBACK_H_
+ 
+ #include "base/functional/callback_forward.h"
++#include "mojo/public/c/system/types.h"
+ 
+ namespace mojo {
+ 
+@@ -18,6 +19,14 @@ using ConnectionErrorWithReasonCallback =
+ using RepeatingConnectionErrorWithReasonCallback =
+     base::RepeatingCallback<void(uint32_t /* custom_reason */,
+                                  const std::string& /* description */)>;
++using ConnectionErrorWithReasonAndResultCallback =
++    base::OnceCallback<void(uint32_t /* custom_reason */,
++                            const std::string& /* description */,
++                            MojoResult /* error_result */)>;
++using RepeatingConnectionErrorWithReasonAndResultCallback =
++    base::RepeatingCallback<void(uint32_t /* custom_reason */,
++                                 const std::string& /* description */,
++                                 MojoResult /* error_result */)>;
+ 
+ }  // namespace mojo
+ 
+diff --git mojo/public/cpp/bindings/connector.h mojo/public/cpp/bindings/connector.h
+index 0b879c4e65d4833b7c12faaeca7c94526d4805fa..10fb98ff3ceb2fe59743bc977b85bb04ebed7f5a 100644
+--- mojo/public/cpp/bindings/connector.h
++++ mojo/public/cpp/bindings/connector.h
+@@ -146,6 +146,11 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) Connector : public MessageReceiver {
+     return error_;
+   }
+ 
++  MojoResult handle_ready_result() const {
++    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++    return handle_ready_result_;
++  }
++
+   // Starts receiving on the Connector's message pipe, allowing incoming
+   // messages and error events to be dispatched. Once called, the Connector is
+   // effectively bound to `task_runner`. Initialization methods like
+@@ -320,6 +325,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) Connector : public MessageReceiver {
+   std::optional<HandleSignalTracker> peer_remoteness_tracker_;
+ 
+   std::atomic<bool> error_ GUARDED_BY_CONTEXT(sequence_checker_);
++  MojoResult handle_ready_result_ = MOJO_RESULT_OK;
+   bool drop_writes_ = false;
+   bool enforce_errors_from_incoming_receiver_ = true;
+ 
+diff --git mojo/public/cpp/bindings/interface_endpoint_client.h mojo/public/cpp/bindings/interface_endpoint_client.h
+index a496f0b2635d2bc7c5f57e9f0e3cedc6eeeffbe8..fca2780025bb50af44587e38d8b1e1b65f97f1af 100644
+--- mojo/public/cpp/bindings/interface_endpoint_client.h
++++ mojo/public/cpp/bindings/interface_endpoint_client.h
+@@ -77,6 +77,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) InterfaceEndpointClient
+     CHECK(sequence_checker_.CalledOnValidSequence());
+     error_handler_ = std::move(error_handler);
+     error_with_reason_handler_.Reset();
++    error_with_reason_and_result_handler_.Reset();
+   }
+ 
+   void set_connection_error_with_reason_handler(
+@@ -84,6 +85,15 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) InterfaceEndpointClient
+     CHECK(sequence_checker_.CalledOnValidSequence());
+     error_with_reason_handler_ = std::move(error_handler);
+     error_handler_.Reset();
++    error_with_reason_and_result_handler_.Reset();
++  }
++
++  void set_connection_error_with_reason_and_result_handler(
++      ConnectionErrorWithReasonAndResultCallback error_handler) {
++    CHECK(sequence_checker_.CalledOnValidSequence());
++    error_with_reason_and_result_handler_ = std::move(error_handler);
++    error_handler_.Reset();
++    error_with_reason_handler_.Reset();
+   }
+ 
+   // Returns true if an error was encountered.
+@@ -156,7 +166,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) InterfaceEndpointClient
+ 
+   // NOTE: |message| must have passed message header validation.
+   bool HandleIncomingMessage(Message* message);
+-  void NotifyError(const std::optional<DisconnectReason>& reason);
++  void NotifyError(const std::optional<DisconnectReason>& reason,
++                   MojoResult error_result);
+ 
+   // The following methods send interface control messages.
+   // They must only be called when the handle is not in pending association
+@@ -346,6 +357,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) InterfaceEndpointClient
+ 
+   base::OnceClosure error_handler_;
+   ConnectionErrorWithReasonCallback error_with_reason_handler_;
++  ConnectionErrorWithReasonAndResultCallback
++      error_with_reason_and_result_handler_;
+   bool encountered_error_ = false;
+ 
+   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
+diff --git mojo/public/cpp/bindings/lib/associated_receiver.cc mojo/public/cpp/bindings/lib/associated_receiver.cc
+index f727b6320bd927b72320652959ad669486ee094e..ebf7536ac38707d2aeb8861b70f16777746ecb7d 100644
+--- mojo/public/cpp/bindings/lib/associated_receiver.cc
++++ mojo/public/cpp/bindings/lib/associated_receiver.cc
+@@ -56,6 +56,13 @@ void AssociatedReceiverBase::set_disconnect_with_reason_handler(
+       std::move(error_handler));
+ }
+ 
++void AssociatedReceiverBase::set_disconnect_with_reason_and_result_handler(
++    ConnectionErrorWithReasonAndResultCallback error_handler) {
++  DCHECK(is_bound());
++  endpoint_client_->set_connection_error_with_reason_and_result_handler(
++      std::move(error_handler));
++}
++
+ void AssociatedReceiverBase::reset_on_disconnect() {
+   DCHECK(is_bound());
+   set_disconnect_handler(
+diff --git mojo/public/cpp/bindings/lib/binding_state.h mojo/public/cpp/bindings/lib/binding_state.h
+index 7efe47038b51b9922a817be9876bfd4830031ebb..22a636f9ac3ad7d6a6e66fc8da6e0229e19460ef 100644
+--- mojo/public/cpp/bindings/lib/binding_state.h
++++ mojo/public/cpp/bindings/lib/binding_state.h
+@@ -66,6 +66,13 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) BindingStateBase {
+         std::move(error_handler));
+   }
+ 
++  void set_connection_error_with_reason_and_result_handler(
++      ConnectionErrorWithReasonAndResultCallback error_handler) {
++    DCHECK(is_bound());
++    endpoint_client_->set_connection_error_with_reason_and_result_handler(
++        std::move(error_handler));
++  }
++
+   bool is_bound() const { return !!router_; }
+ 
+   MessagePipeHandle handle() const {
+diff --git mojo/public/cpp/bindings/lib/connector.cc mojo/public/cpp/bindings/lib/connector.cc
+index 99535929e57b59c0d053a29f5539de306b88cc82..aa358e7e9b2fb78706051086d5547b83bbf782ba 100644
+--- mojo/public/cpp/bindings/lib/connector.cc
++++ mojo/public/cpp/bindings/lib/connector.cc
+@@ -439,6 +439,8 @@ void Connector::OnSyncHandleWatcherHandleReady(const char* interface_name,
+ void Connector::OnHandleReadyInternal(MojoResult result) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+ 
++  handle_ready_result_ = result;
++
+   if (result == MOJO_RESULT_FAILED_PRECONDITION) {
+     // No more messages on the pipe and the peer is closed.
+     HandleError(false /* force_pipe_reset */, false /* force_async_handler */);
+diff --git mojo/public/cpp/bindings/lib/interface_endpoint_client.cc mojo/public/cpp/bindings/lib/interface_endpoint_client.cc
+index e6a9a30c47cd4db0f942536a42a3619222b6abda..31f46883503fbd9159dc08d1ba03184c705bb29a 100644
+--- mojo/public/cpp/bindings/lib/interface_endpoint_client.cc
++++ mojo/public/cpp/bindings/lib/interface_endpoint_client.cc
+@@ -754,7 +754,8 @@ bool InterfaceEndpointClient::HandleIncomingMessage(Message* message) {
+ }
+ 
+ void InterfaceEndpointClient::NotifyError(
+-    const std::optional<DisconnectReason>& reason) {
++    const std::optional<DisconnectReason>& reason,
++    MojoResult error_result) {
+   TRACE_EVENT("toplevel", "Closed mojo endpoint",
+               [&](perfetto::EventContext& ctx) {
+                 auto* info = ctx.event()->set_chrome_mojo_event_info();
+@@ -791,6 +792,14 @@ void InterfaceEndpointClient::NotifyError(
+     } else {
+       std::move(error_with_reason_handler_).Run(0, std::string());
+     }
++  } else if (error_with_reason_and_result_handler_) {
++    if (reason) {
++      std::move(error_with_reason_and_result_handler_)
++          .Run(reason->custom_reason, reason->description, error_result);
++    } else {
++      std::move(error_with_reason_and_result_handler_)
++          .Run(0, std::string(), error_result);
++    }
+   }
+ }
+ 
+@@ -935,7 +944,8 @@ void InterfaceEndpointClient::OnAssociationEvent(
+     task_runner_->PostTask(FROM_HERE,
+                            base::BindOnce(&InterfaceEndpointClient::NotifyError,
+                                           weak_ptr_factory_.GetWeakPtr(),
+-                                          handle_.disconnect_reason()));
++                                          handle_.disconnect_reason(),
++                                          MOJO_RESULT_OK));
+   }
+ }
+ 
+diff --git mojo/public/cpp/bindings/lib/interface_ptr_state.h mojo/public/cpp/bindings/lib/interface_ptr_state.h
+index 443d0b74e0c92f5788076537b83a6e37e02100a4..aa39a01bbe4b3d635b0fbd023fa8fafbc2406093 100644
+--- mojo/public/cpp/bindings/lib/interface_ptr_state.h
++++ mojo/public/cpp/bindings/lib/interface_ptr_state.h
+@@ -230,6 +230,15 @@ class InterfacePtrState : public InterfacePtrStateBase {
+         std::move(error_handler));
+   }
+ 
++  void set_connection_error_with_reason_and_result_handler(
++      ConnectionErrorWithReasonAndResultCallback error_handler) {
++    ConfigureProxyIfNecessary();
++
++    DCHECK(endpoint_client());
++    endpoint_client()->set_connection_error_with_reason_and_result_handler(
++        std::move(error_handler));
++  }
++
+   void set_idle_handler(base::TimeDelta timeout,
+                         base::RepeatingClosure handler) {
+     ConfigureProxyIfNecessary();
+diff --git mojo/public/cpp/bindings/lib/multiplex_router.cc mojo/public/cpp/bindings/lib/multiplex_router.cc
+index 6086f9b36062550dd06d70215bda7d23f086e528..3af3538e0b74176fd5bacf393e8b27073cfaa4b0 100644
+--- mojo/public/cpp/bindings/lib/multiplex_router.cc
++++ mojo/public/cpp/bindings/lib/multiplex_router.cc
+@@ -86,6 +86,12 @@ class MultiplexRouter::InterfaceEndpoint
+     disconnect_reason_ = disconnect_reason;
+   }
+ 
++  MojoResult error_result() const { return error_result_; }
++  void set_error_result(MojoResult error_result) {
++    router_->AssertLockAcquired();
++    error_result_ = error_result;
++  }
++
+   base::SequencedTaskRunner* task_runner() const { return task_runner_.get(); }
+ 
+   InterfaceEndpointClient* client() const { return client_; }
+@@ -265,6 +271,7 @@ class MultiplexRouter::InterfaceEndpoint
+   bool handle_created_;
+ 
+   std::optional<DisconnectReason> disconnect_reason_;
++  MojoResult error_result_ = MOJO_RESULT_OK;
+ 
+   // The task runner on which |client_|'s methods can be called.
+   scoped_refptr<base::SequencedTaskRunner> task_runner_;
+@@ -914,6 +921,8 @@ void MultiplexRouter::OnPipeConnectionError(bool force_async_dispatch) {
+         endpoint->client()->ForgetAsyncRequest(request_id);
+       }
+ 
++      endpoint->set_error_result(connector_.handle_ready_result());
++
+       tasks_.push_back(Task::CreateNotifyErrorTask(endpoint.get()));
+     }
+ 
+@@ -1113,7 +1122,7 @@ bool MultiplexRouter::ProcessNotifyErrorTask(
+     // It is safe to call into |client| without the lock. Because |client| is
+     // always accessed on the same sequence, including DetachEndpointClient().
+     MayAutoUnlock unlocker(&lock_);
+-    client->NotifyError(disconnect_reason);
++    client->NotifyError(disconnect_reason, endpoint->error_result());
+   }
+   return true;
+ }
+diff --git mojo/public/cpp/bindings/receiver.h mojo/public/cpp/bindings/receiver.h
+index 731c6a67b11dfc510cf3835ede4fd9fb4b52796f..1d56536630359ff816cba53f427dbbbacb63cf01 100644
+--- mojo/public/cpp/bindings/receiver.h
++++ mojo/public/cpp/bindings/receiver.h
+@@ -105,6 +105,12 @@ class Receiver {
+     internal_state_.set_connection_error_with_reason_handler(
+         std::move(error_handler));
+   }
++  void set_disconnect_with_reason_and_result_handler(
++      ConnectionErrorWithReasonAndResultCallback error_handler) {
++    DCHECK(is_bound());
++    internal_state_.set_connection_error_with_reason_and_result_handler(
++        std::move(error_handler));
++  }
+ 
+   // Resets this Receiver to an unbound state. An unbound Receiver will NEVER
+   // schedule method calls or disconnection notifications, and any pending tasks
+diff --git mojo/public/cpp/bindings/receiver_set.cc mojo/public/cpp/bindings/receiver_set.cc
+index ba36cf3bad0fefc3539b73a875d9b09889688e71..5de9edc62841dc4c8c9fd82cc303a38ef761f068 100644
+--- mojo/public/cpp/bindings/receiver_set.cc
++++ mojo/public/cpp/bindings/receiver_set.cc
+@@ -70,9 +70,10 @@ void ReceiverSetState::Entry::DidDispatchOrReject() {
+ }
+ 
+ void ReceiverSetState::Entry::OnDisconnect(uint32_t custom_reason_code,
+-                                           const std::string& description) {
++                                           const std::string& description,
++                                           MojoResult error_result) {
+   WillDispatch();
+-  state_.OnDisconnect(id_, custom_reason_code, description);
++  state_.OnDisconnect(id_, custom_reason_code, description, error_result);
+ }
+ 
+ ReceiverSetState::ReceiverSetState() = default;
+@@ -82,12 +83,21 @@ ReceiverSetState::~ReceiverSetState() = default;
+ void ReceiverSetState::set_disconnect_handler(base::RepeatingClosure handler) {
+   disconnect_handler_ = std::move(handler);
+   disconnect_with_reason_handler_.Reset();
++  disconnect_with_reason_and_result_handler_.Reset();
+ }
+ 
+ void ReceiverSetState::set_disconnect_with_reason_handler(
+     RepeatingConnectionErrorWithReasonCallback handler) {
+   disconnect_with_reason_handler_ = std::move(handler);
+   disconnect_handler_.Reset();
++  disconnect_with_reason_and_result_handler_.Reset();
++}
++
++void ReceiverSetState::set_disconnect_with_reason_and_result_handler(
++    RepeatingConnectionErrorWithReasonAndResultCallback handler) {
++  disconnect_with_reason_and_result_handler_ = std::move(handler);
++  disconnect_handler_.Reset();
++  disconnect_with_reason_handler_.Reset();
+ }
+ 
+ ReportBadMessageCallback ReceiverSetState::GetBadMessageCallback() {
+@@ -166,7 +176,8 @@ void ReceiverSetState::SetDispatchContext(void* context,
+ 
+ void ReceiverSetState::OnDisconnect(ReceiverId id,
+                                     uint32_t custom_reason_code,
+-                                    const std::string& description) {
++                                    const std::string& description,
++                                    MojoResult error_result) {
+   auto it = entries_.find(id);
+   CHECK(it != entries_.end());
+ 
+@@ -178,6 +189,9 @@ void ReceiverSetState::OnDisconnect(ReceiverId id,
+     disconnect_handler_.Run();
+   } else if (disconnect_with_reason_handler_) {
+     disconnect_with_reason_handler_.Run(custom_reason_code, description);
++  } else if (disconnect_with_reason_and_result_handler_) {
++    disconnect_with_reason_and_result_handler_.Run(custom_reason_code,
++                                                   description, error_result);
+   }
+ }
+ 
+diff --git mojo/public/cpp/bindings/receiver_set.h mojo/public/cpp/bindings/receiver_set.h
+index e27b8e81cb72ba10ac2ba2ddb59bdc6239606794..54c25368f462b6489ee03ca5e881ed9dc68667fc 100644
+--- mojo/public/cpp/bindings/receiver_set.h
++++ mojo/public/cpp/bindings/receiver_set.h
+@@ -72,7 +72,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
+     virtual void* GetContext() = 0;
+     virtual void InstallDispatchHooks(
+         std::unique_ptr<MessageFilter> filter,
+-        RepeatingConnectionErrorWithReasonCallback disconnect_handler) = 0;
++        RepeatingConnectionErrorWithReasonAndResultCallback
++            disconnect_handler) = 0;
+     virtual void FlushForTesting() = 0;
+     virtual void ResetWithReason(uint32_t custom_reason_code,
+                                  const std::string& description) = 0;
+@@ -94,7 +95,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
+     void WillDispatch();
+     void DidDispatchOrReject();
+     void OnDisconnect(uint32_t custom_reason_code,
+-                      const std::string& description);
++                      const std::string& description,
++                      MojoResult error_result);
+ 
+     // RAW_PTR_EXCLUSION: Binary size increase.
+     RAW_PTR_EXCLUSION ReceiverSetState& state_;
+@@ -130,6 +132,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
+   void set_disconnect_handler(base::RepeatingClosure handler);
+   void set_disconnect_with_reason_handler(
+       RepeatingConnectionErrorWithReasonCallback handler);
++  void set_disconnect_with_reason_and_result_handler(
++      RepeatingConnectionErrorWithReasonAndResultCallback handler);
+ 
+   ReportBadMessageCallback GetBadMessageCallback();
+   ReceiverId Add(std::unique_ptr<ReceiverState> receiver,
+@@ -142,11 +146,14 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ReceiverSetState {
+   void SetDispatchContext(void* context, ReceiverId receiver_id);
+   void OnDisconnect(ReceiverId id,
+                     uint32_t custom_reason_code,
+-                    const std::string& description);
++                    const std::string& description,
++                    MojoResult error_result);
+ 
+  private:
+   base::RepeatingClosure disconnect_handler_;
+   RepeatingConnectionErrorWithReasonCallback disconnect_with_reason_handler_;
++  RepeatingConnectionErrorWithReasonAndResultCallback
++      disconnect_with_reason_and_result_handler_;
+   ReceiverId next_receiver_id_ = 0;
+   EntryMap entries_;
+   raw_ptr<void, DanglingUntriaged> current_context_ = nullptr;
+@@ -509,11 +516,12 @@ class ReceiverSetBase {
+     const void* GetContext() const override { return &context_; }
+     void* GetContext() override { return &context_; }
+ 
+-    void InstallDispatchHooks(std::unique_ptr<MessageFilter> filter,
+-                              RepeatingConnectionErrorWithReasonCallback
+-                                  disconnect_handler) override {
++    void InstallDispatchHooks(
++        std::unique_ptr<MessageFilter> filter,
++        RepeatingConnectionErrorWithReasonAndResultCallback
++            disconnect_handler) override {
+       receiver_.SetFilter(std::move(filter));
+-      receiver_.set_disconnect_with_reason_handler(
++      receiver_.set_disconnect_with_reason_and_result_handler(
+           std::move(disconnect_handler));
+     }
+ 
+diff --git mojo/public/cpp/bindings/remote.h mojo/public/cpp/bindings/remote.h
+index 8dff5e3e88fd4a2485c673735c5cf85623502105..92c8950ccd228df9821487505786cfe6ea580580 100644
+--- mojo/public/cpp/bindings/remote.h
++++ mojo/public/cpp/bindings/remote.h
+@@ -158,6 +158,11 @@ class Remote {
+     internal_state_.set_connection_error_with_reason_handler(
+         std::move(handler));
+   }
++  void set_disconnect_with_reason_and_result_handler(
++      ConnectionErrorWithReasonAndResultCallback handler) {
++    internal_state_.set_connection_error_with_reason_and_result_handler(
++        std::move(handler));
++  }
+ 
+   // A convenient helper that resets this Remote on disconnect. Note that this
+   // replaces any previously set disconnection handler. Must be called on a

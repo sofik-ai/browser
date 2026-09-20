@@ -1,0 +1,56 @@
+diff --git content/browser/browser_plugin/browser_plugin_embedder.h content/browser/browser_plugin/browser_plugin_embedder.h
+index ea2891a279371f7967786e44188aee9afe19607f..595e5b8eb2cb66d0a8cdf70629fed806314d8374 100644
+--- content/browser/browser_plugin/browser_plugin_embedder.h
++++ content/browser/browser_plugin/browser_plugin_embedder.h
+@@ -15,6 +15,7 @@
+ #define CONTENT_BROWSER_BROWSER_PLUGIN_BROWSER_PLUGIN_EMBEDDER_H_
+ 
+ #include "base/memory/raw_ptr.h"
++#include "content/common/content_export.h"
+ 
+ namespace input {
+ struct NativeWebKeyboardEvent;
+@@ -29,7 +30,7 @@ class WebContentsImpl;
+ 
+ // TODO(wjmaclean): Get rid of "BrowserPlugin" in the name of this class.
+ // Perhaps "WebContentsEmbedderDelegate" would be better?
+-class BrowserPluginEmbedder {
++class CONTENT_EXPORT BrowserPluginEmbedder {
+  public:
+   BrowserPluginEmbedder(const BrowserPluginEmbedder&) = delete;
+   BrowserPluginEmbedder& operator=(const BrowserPluginEmbedder&) = delete;
+diff --git content/browser/browser_plugin/browser_plugin_guest.cc content/browser/browser_plugin/browser_plugin_guest.cc
+index 9c2b92be1dd0797d6e7867f3c9f7c6a0f2421984..adfda85e74ea891842dc28b95e13176b3a1ba4e7 100644
+--- content/browser/browser_plugin/browser_plugin_guest.cc
++++ content/browser/browser_plugin/browser_plugin_guest.cc
+@@ -49,6 +49,8 @@ std::unique_ptr<WebContentsImpl> BrowserPluginGuest::CreateNewGuestWindow(
+ }
+ 
+ void BrowserPluginGuest::InitInternal(WebContentsImpl* owner_web_contents) {
++  owner_web_contents_ = owner_web_contents;
++
+   RenderWidgetHostImpl* rwhi =
+       GetWebContents()->GetPrimaryMainFrame()->GetRenderWidgetHost();
+   DCHECK(rwhi);
+diff --git content/browser/browser_plugin/browser_plugin_guest.h content/browser/browser_plugin/browser_plugin_guest.h
+index 91c9f60d586972c294da016e8ae19ddda02a2023..987b2f68146044f130b7ff94fbe972ca4e78b164 100644
+--- content/browser/browser_plugin/browser_plugin_guest.h
++++ content/browser/browser_plugin/browser_plugin_guest.h
+@@ -68,6 +68,8 @@ class BrowserPluginGuest : public WebContentsObserver {
+   WebContentsImpl* GetWebContents() const;
+   RenderFrameHostImpl* GetProspectiveOuterDocument();
+ 
++  WebContentsImpl* owner_web_contents() const { return owner_web_contents_; }
++
+  private:
+   // BrowserPluginGuest is a WebContentsObserver of |web_contents| and
+   // |web_contents| has to stay valid for the lifetime of BrowserPluginGuest.
+@@ -78,6 +80,8 @@ class BrowserPluginGuest : public WebContentsObserver {
+ 
+   // May be null during guest destruction.
+   const base::WeakPtr<BrowserPluginGuestDelegate> delegate_;
++
++  raw_ptr<WebContentsImpl> owner_web_contents_ = nullptr;
+ };
+ 
+ }  // namespace content

@@ -1,0 +1,28 @@
+diff --git ui/accessibility/platform/BUILD.gn ui/accessibility/platform/BUILD.gn
+index 5de832ed42556ccebf15a7d0b6b316d97cd1b9b2..8791883f20ac2679d4fc67e880159f8057fcfc3a 100644
+--- ui/accessibility/platform/BUILD.gn
++++ ui/accessibility/platform/BUILD.gn
+@@ -363,6 +363,10 @@ component("platform") {
+       if (use_gio) {
+         configs += [ "//build/linux:gio_config" ]
+       }
++
++      if (is_clang) {
++        cflags = [ "-Wno-deprecated-volatile" ]
++      }
+     }
+   }
+ }
+diff --git ui/gtk/BUILD.gn ui/gtk/BUILD.gn
+index 6d2693a68a2f38a9ac9619a5cedab1d1ca304483..5aff3afdb5ffe6930bdb89e7d4d7a49597951266 100644
+--- ui/gtk/BUILD.gn
++++ ui/gtk/BUILD.gn
+@@ -184,4 +184,8 @@ component("gtk") {
+ 
+   # TODO: This should be removed.
+   deps += [ "//ui/ozone" ]
++
++  if (is_clang) {
++    cflags = [ "-Wno-deprecated-volatile" ]
++  }
+ }

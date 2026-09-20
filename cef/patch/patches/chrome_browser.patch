@@ -1,0 +1,31 @@
+diff --git chrome/browser/BUILD.gn chrome/browser/BUILD.gn
+index 63c2601cfcaabb179221dcd63506c09b1d85487f..d1ee56965b9b2cc9fb71b4ba740f71f487f2c25f 100644
+--- chrome/browser/BUILD.gn
++++ chrome/browser/BUILD.gn
+@@ -11,6 +11,7 @@ import("//build/config/compiler/pgo/pgo.gni")
+ import("//build/config/features.gni")
+ import("//build/config/python.gni")
+ import("//build/config/ui.gni")
++import("//cef/libcef/features/features.gni")
+ import("//chrome/browser/buildflags.gni")
+ import("//chrome/browser/downgrade/buildflags.gni")
+ import("//chrome/common/features.gni")
+@@ -669,6 +670,7 @@ static_library("browser") {
+     "//build/config/compiler:compiler_buildflags",
+     "//build/config/linux/dbus:buildflags",
+     "//cc",
++    "//cef/libcef/features:buildflags",
+     "//chrome:extra_resources",
+     "//chrome:resources",
+     "//chrome:strings",
+@@ -1671,6 +1673,10 @@ static_library("browser") {
+     ]
+   }
+ 
++  if (enable_cef) {
++    configs += [ "//cef/libcef/features:config" ]
++  }
++
+   if (is_android) {
+     deps += [
+       "//chrome/browser/ntp_customization",

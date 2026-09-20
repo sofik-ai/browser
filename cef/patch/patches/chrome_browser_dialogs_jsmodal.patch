@@ -1,0 +1,103 @@
+diff --git chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.cc chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.cc
+index 224d2d57fdd1491d7949d2ccd9e0995bf4ead00d..501adae850a2a50f988d46a591cb7009c9f4c458 100644
+--- chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.cc
++++ chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.cc
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <utility>
+ 
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -30,6 +31,22 @@
+ #include "chrome/browser/safe_browsing/user_interaction_observer.h"
+ #endif
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/chrome_extension_util.h"
++#endif
++
++namespace {
++
++bool IsAlloyContents(content::WebContents* web_contents) {
++#if BUILDFLAG(ENABLE_CEF)
++  return cef::IsAlloyContents(web_contents, /*primary_only=*/true);
++#else
++  return false;
++#endif
++}
++
++}  // namespace
++
+ JavaScriptTabModalDialogManagerDelegateDesktop::
+     JavaScriptTabModalDialogManagerDelegateDesktop(
+         content::WebContents* web_contents)
+@@ -87,6 +104,9 @@ bool JavaScriptTabModalDialogManagerDelegateDesktop::IsWebContentsForemost() {
+   BrowserWindowInterface* browser =
+       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+   if (!browser) {
++    if (IsAlloyContents(web_contents_)) {
++      return true;
++    }
+     // It's rare, but there are crashes from where sites are trying to show
+     // dialogs in the split second of time between when their Browser is gone
+     // and they're gone. In that case, bail. https://crbug.com/40727952
+@@ -104,6 +124,9 @@ bool JavaScriptTabModalDialogManagerDelegateDesktop::IsWebContentsForemost() {
+ }
+ 
+ bool JavaScriptTabModalDialogManagerDelegateDesktop::IsApp() {
++  if (IsAlloyContents(web_contents_)) {
++    return false;
++  }
+   tabs::TabInterface* tab =
+       tabs::TabInterface::MaybeGetFromContents(web_contents_);
+   if (!tab) {
+@@ -119,6 +142,9 @@ bool JavaScriptTabModalDialogManagerDelegateDesktop::IsApp() {
+ bool JavaScriptTabModalDialogManagerDelegateDesktop::CanShowModalUI() {
+   tabs::TabInterface* tab =
+       tabs::TabInterface::MaybeGetFromContents(web_contents_);
++  if (!tab && IsAlloyContents(web_contents_)) {
++    return true;
++  }
+   return tab && tab->CanShowModalUI();
+ }
+ 
+diff --git chrome/browser/ui/views/javascript_tab_modal_dialog_view_views.cc chrome/browser/ui/views/javascript_tab_modal_dialog_view_views.cc
+index e0c7c6df6f4159e600d470a13b592c473808d26b..106cf8d8b998a9310179dd51c409f45c28d5edd9 100644
+--- chrome/browser/ui/views/javascript_tab_modal_dialog_view_views.cc
++++ chrome/browser/ui/views/javascript_tab_modal_dialog_view_views.cc
+@@ -49,9 +49,13 @@ views::View* JavaScriptTabModalDialogViewViews::GetInitiallyFocusedView() {
+ }
+ 
+ void JavaScriptTabModalDialogViewViews::AddedToWidget() {
+-  auto* bubble_frame_view = static_cast<views::BubbleFrameView*>(
+-      GetWidget()->non_client_view()->frame_view());
+-  bubble_frame_view->SetTitleView(CreateTitleOriginLabel(GetWindowTitle()));
++  auto* frame_view = GetWidget()->non_client_view()->frame_view();
++  // With CEF OSR this may be a NativeFrameView, in which case HasWindowTitle()
++  // will return false.
++  if (frame_view->HasWindowTitle()) {
++    auto* bubble_frame_view = static_cast<views::BubbleFrameView*>(frame_view);
++    bubble_frame_view->SetTitleView(CreateTitleOriginLabel(GetWindowTitle()));
++  }
+   if (!message_text_.empty()) {
+     GetWidget()->GetRootView()->GetViewAccessibility().SetDescription(
+         message_text_);
+@@ -79,10 +83,13 @@ JavaScriptTabModalDialogViewViews::JavaScriptTabModalDialogViewViews(
+       default_prompt_text_(default_prompt_text),
+       dialog_callback_(std::move(dialog_callback)),
+       dialog_force_closed_callback_(std::move(dialog_force_closed_callback)) {
++  // Will be nullptr with CEF Alloy style browsers.
+   tabs::TabInterface* tab =
+-      tabs::TabInterface::GetFromContents(parent_web_contents);
+-  CHECK(tab && tab->CanShowModalUI());
+-  scoped_tab_modal_ui_ = tab->ShowModalUI();
++      tabs::TabInterface::MaybeGetFromContents(parent_web_contents);
++  if (tab) {
++    CHECK(tab->CanShowModalUI());
++    scoped_tab_modal_ui_ = tab->ShowModalUI();
++  }
+ 
+   SetModalType(ui::mojom::ModalType::kChild);
+   SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kOk));

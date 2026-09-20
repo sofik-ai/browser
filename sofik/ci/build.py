@@ -464,6 +464,29 @@ def ninja_command(config: str) -> list[str]:
     return ["autoninja", "-C", out_dir(config), "-k", "0", *targets]
 
 
+def missing_inputs(config: str, env) -> list[str]:
+    """Every source file the graph names and the tree does not have.
+
+    The tree was pruned against lists taken on a Mac, where the Windows and
+    Linux graphs could be generated but not run: what their *host* tools read,
+    and what a configuration generated slightly differently reads, was in
+    nobody's list. A build finds such a file the hard way -- the scheduler
+    stops at the first one, the stage fails, and the next run finds the second.
+    A dry run with -k 0 walks the whole graph without compiling anything and
+    names them all at once, in about a minute.
+    """
+    import re
+    targets = ninja_command(config)[5:]
+    command = ["siso", "ninja", "-C", out_dir(config), "-n", "-offline",
+               "-k", "0", *targets]
+    result = subprocess.run(
+        " ".join(command) if IS_WINDOWS else command, cwd=str(SRC), env=env,
+        shell=IS_WINDOWS, capture_output=True, text=True, errors="replace")
+    found = re.findall(r'"([^"]+)", needed by', result.stdout + result.stderr)
+    return sorted({os.path.normpath(os.path.join(out_dir(config), path))
+                   .replace(os.sep, "/") for path in found})
+
+
 def run_with_deadline(command: list[str], cwd: Path, env, seconds: int) -> int | None:
     """Runs a command; returns its exit code, or None if the deadline passed.
 
@@ -515,6 +538,15 @@ def cmd_build(args: argparse.Namespace) -> None:
         raise SystemExit(f"no build directory: run `gen --config {args.config}`")
 
     env = build_env()
+    missing = missing_inputs(args.config, env)
+    if missing:
+        print(f"--> {len(missing)} files the build reads are not in the tree:",
+              flush=True)
+        for path in missing:
+            print(f"    MISSING {path}", flush=True)
+        set_output("complete", "false")
+        raise SystemExit("the tree is incomplete for this platform; "
+                         "restore the files above (they are in quarantine)")
     code = run_with_deadline(
         ninja_command(args.config), SRC, env, args.deadline * 60
     )

@@ -88,7 +88,7 @@ class OffscreenContentsView : public content::WebContentsView,
 
   // content::RenderViewHostDelegateView:
   void ShowContextMenu(content::RenderFrameHost& render_frame_host,
-                       const content::ContextMenuParams& params) override {}
+                       const content::ContextMenuParams& params) override;
   void StartDragging(
       content::RenderFrameHost& source_rfh,
       const content::DropData& drop_data,

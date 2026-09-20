@@ -21,6 +21,7 @@
 #include "components/input/native_web_keyboard_event.h"
 #include "components/download/public/common/download_item.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/file_select_listener.h"
@@ -49,6 +50,7 @@
 #include "sofik/engine/engine.h"
 #include "sofik/engine/offscreen_contents_view.h"
 #include "sofik/engine/offscreen_view.h"
+#include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
@@ -428,6 +430,33 @@ void View::Stop() {
   }
 }
 
+void View::Edit(uint32_t command) {
+  if (!contents_) {
+    return;
+  }
+  content::WebContents* page = contents_->web_contents();
+  switch (command) {
+    case SOFIK_EDIT_CUT:
+      page->Cut();
+      break;
+    case SOFIK_EDIT_COPY:
+      page->Copy();
+      break;
+    case SOFIK_EDIT_PASTE:
+      page->Paste();
+      break;
+    case SOFIK_EDIT_SELECT_ALL:
+      page->SelectAll();
+      break;
+  }
+}
+
+void View::OpenLinkFromMenu(const std::string& url) {
+  if (callbacks_.on_popup_requested) {
+    callbacks_.on_popup_requested(user_, id_, url.c_str(), /*gesture=*/1);
+  }
+}
+
 void View::SetZoom(double level) {
   if (contents_) {
     content::HostZoomMap::SetZoomLevel(contents_->web_contents(), level);
@@ -788,6 +817,50 @@ void View::ImeCancel() {
     view->ImeCancel();
   }
 }
+
+// ---- context menus ----------------------------------------------------------
+
+void View::OnContextMenu(content::RenderFrameHost& frame,
+                         const content::ContextMenuParams& params) {
+  OnContextMenuRequested(params);
+}
+
+void View::OnContextMenuRequested(const content::ContextMenuParams& params) {
+  if (!callbacks_.on_context_menu) {
+    if (!contents_view_) {
+      ShowNativeContextMenu(params);
+    }
+    return;
+  }
+  const std::string link = params.link_url.spec();
+  const std::string source = params.src_url.spec();
+  const std::string selection = base::UTF16ToUTF8(params.selection_text);
+  sofik_context_menu menu = {};
+  menu.x = params.x;
+  menu.y = params.y;
+  menu.link_url = link.c_str();
+  menu.source_url = source.c_str();
+  menu.selection = selection.c_str();
+  menu.is_editable = params.is_editable;
+  using blink::ContextMenuDataEditFlags;
+  menu.edit =
+      ((params.edit_flags & ContextMenuDataEditFlags::kCanCut) ? SOFIK_EDIT_CUT
+                                                               : 0) |
+      ((params.edit_flags & ContextMenuDataEditFlags::kCanCopy)
+           ? SOFIK_EDIT_COPY
+           : 0) |
+      ((params.edit_flags & ContextMenuDataEditFlags::kCanPaste)
+           ? SOFIK_EDIT_PASTE
+           : 0) |
+      ((params.edit_flags & ContextMenuDataEditFlags::kCanSelectAll)
+           ? SOFIK_EDIT_SELECT_ALL
+           : 0);
+  callbacks_.on_context_menu(user_, id_, &menu);
+}
+
+#if !BUILDFLAG(IS_MAC)
+void View::ShowNativeContextMenu(const content::ContextMenuParams&) {}
+#endif
 
 // ---- new windows and dialogs ------------------------------------------------
 
@@ -1386,6 +1459,12 @@ void sofik_view_reload(sofik_view_id id, int ignore_cache) {
 void sofik_view_stop(sofik_view_id id) {
   if (sofik::View* view = Find(id)) {
     view->Stop();
+  }
+}
+
+void sofik_view_edit(sofik_view_id id, uint32_t command) {
+  if (sofik::View* view = Find(id)) {
+    view->Edit(command);
   }
 }
 

@@ -25,7 +25,12 @@ HeadlessBrowserMainParts::HeadlessBrowserMainParts(HeadlessBrowserImpl& browser)
 HeadlessBrowserMainParts::~HeadlessBrowserMainParts() = default;
 
 int HeadlessBrowserMainParts::PreMainMessageLoopRun() {
-  SetHeadlessClipboardForCurrentThread();
+  // Sofik: headless keeps a clipboard of its own, in memory, so that an
+  // unattended process never touches the desktop's. Behind a Browser Card a
+  // person copies from a page to paste somewhere else, and back: the real one.
+  if (!HeadlessBrowser::UsesBrowserIdentity()) {
+    SetHeadlessClipboardForCurrentThread();
+  }
   // Sofik: the delegate rotates the headless screen, and casts whatever
   // screen is installed to one. An embedded browser is on the real monitor,
   // which no page can rotate -- desktop Chrome rejects orientation.lock() too.

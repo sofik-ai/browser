@@ -157,6 +157,20 @@ typedef struct sofik_download {
   int is_complete, is_canceled, is_interrupted;
 } sofik_download;
 
+/* What the person right-clicked. */
+enum {
+  SOFIK_EDIT_CUT = 1 << 0, SOFIK_EDIT_COPY = 1 << 1, SOFIK_EDIT_PASTE = 1 << 2,
+  SOFIK_EDIT_SELECT_ALL = 1 << 3,
+};
+typedef struct sofik_context_menu {
+  int x, y;               /* DIPs, relative to the view */
+  const char* link_url;   /* "" when not on a link */
+  const char* source_url; /* of the image or media element, or "" */
+  const char* selection;  /* the selected text, or "" */
+  int is_editable;        /* in a text field */
+  uint32_t edit;          /* the SOFIK_EDIT_* commands that apply right now */
+} sofik_context_menu;
+
 /* Every callback may be NULL. `user` is the pointer given at creation.
  * Strings are UTF-8 and owned by the engine: copy what must outlive the call.
  * A request the host does not answer stays pending, and a pending one blocks
@@ -211,6 +225,11 @@ typedef struct sofik_view_callbacks {
   /* The page started or stopped using the camera or the microphone: what an
    * "in use" indicator shows. */
   void (*on_media_access)(void* user, sofik_view_id, int video, int audio);
+
+  /* A right click. With this set the host shows the menu, in either kind of
+   * view. Without it a native view shows a plain one of its own -- back,
+   * forward, reload, the link, the clipboard -- and a frame view shows none. */
+  void (*on_context_menu)(void* user, sofik_view_id, const sofik_context_menu*);
 
   void (*on_closed)(void* user, sofik_view_id);
 } sofik_view_callbacks;
@@ -276,6 +295,9 @@ SOFIK_EXPORT void sofik_view_go_forward(sofik_view_id);
 SOFIK_EXPORT void sofik_view_reload(sofik_view_id, int ignore_cache);
 SOFIK_EXPORT void sofik_view_stop(sofik_view_id);
 SOFIK_EXPORT void sofik_view_set_zoom(sofik_view_id, double level);
+/* One SOFIK_EDIT_* command on whatever has focus in the page: what a host's
+ * own context menu, or its Edit menu over a frame view, calls. */
+SOFIK_EXPORT void sofik_view_edit(sofik_view_id, uint32_t command);
 
 /* ---- input --------------------------------------------------------------- */
 

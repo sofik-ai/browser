@@ -10,6 +10,7 @@
 //   sofik_engine_host --view-test [--shot=PNG] <url of test/view_test.html>
 //   sofik_engine_host --native-view ...   the page in an NSView, not a texture
 //   sofik_engine_host --devtools [--shot=PNG] <url>   Developer Tools beside it
+//   sofik_engine_host --menu-test <url of test/view_test.html>
 //   sofik_engine_host --dialog-test --upload=FILE <url of test/upload_test.html>
 
 #import <Cocoa/Cocoa.h>
@@ -182,6 +183,7 @@ int WindowsKeyCode(NSEvent* event) {
 @property BOOL nativeView;
 @property BOOL devtools;
 @property BOOL allowMic;
+@property BOOL menuTest;
 @property(strong) NSWindow* devtoolsWindow;
 @property(copy) NSString* switches;
 @property(copy) NSString* uploadPath;
@@ -259,6 +261,11 @@ static void OnPermission(void*, sofik_view_id view, uint32_t request,
   dispatch_async(dispatch_get_main_queue(), ^{
     sofik_view_answer_permission(view, request, granted);
   });
+}
+static void OnContextMenu(void*, sofik_view_id, const sofik_context_menu* m) {
+  NSLog(@"sofik host: context menu at %d,%d link=[%s] selection=[%s] "
+        @"editable=%d edit=0x%x",
+        m->x, m->y, m->link_url, m->selection, m->is_editable, m->edit);
 }
 static void OnMediaAccess(void*, sofik_view_id, int video, int audio) {
   NSLog(@"sofik host: media access video=%d audio=%d", video, audio);
@@ -411,6 +418,7 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   callbacks.on_ime_composition_bounds = OnImeBounds;
   callbacks.on_permission_request = OnPermission;
   callbacks.on_media_access = OnMediaAccess;
+  if (self.viewTest) callbacks.on_context_menu = OnContextMenu;
 
   sofik_view_config config = {};
   config.url = self.url.UTF8String;
@@ -440,6 +448,51 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     native.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.page addSubview:native];
     [self.window makeFirstResponder:native];
+  }
+
+  if (self.menuTest) {
+    // A native view's own context menu. A menu runs a loop of its own, so it
+    // is watched for, read and dismissed from a notification; the right click
+    // is an agent's, over DevTools, which is a real click to the page.
+    sofik_view_cdp_attach(g_view, OnCdp, nullptr);
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:NSMenuDidBeginTrackingNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* note) {
+                  NSMenu* menu = note.object;
+                  NSMutableArray* titles = [NSMutableArray array];
+                  for (NSMenuItem* item in menu.itemArray) {
+                    if (item.isSeparatorItem) continue;
+                    [titles addObject:[NSString
+                        stringWithFormat:@"%@%@", item.title,
+                                         item.enabled ? @"" : @" (off)"]];
+                  }
+                  NSLog(@"sofik host: native menu [%@]",
+                        [titles componentsJoinedByString:@" | "]);
+                  dispatch_after(
+                      dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC),
+                      dispatch_get_main_queue(), ^{
+                        [menu cancelTracking];
+                      });
+                }];
+    auto after = ^(int ms, dispatch_block_t block) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ms * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), block);
+    };
+    auto press = ^(const char* type) {
+      NSString* message = [NSString
+          stringWithFormat:@"{\"id\":3,\"method\":\"Input.dispatchMouseEvent\","
+                           @"\"params\":{\"type\":\"%s\",\"x\":60,\"y\":35,"
+                           @"\"button\":\"right\",\"buttons\":2,"
+                           @"\"clickCount\":1}}",
+                           type];
+      sofik_view_cdp_send(g_view, message.UTF8String);
+    };
+    after(2500, ^{ press("mousePressed"); });
+    after(2600, ^{ press("mouseReleased"); });
+    after(4500, ^{ [NSApp terminate:nil]; });
+    return;
   }
 
   if (self.devtools) {
@@ -549,6 +602,7 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
   }
 
   if (self.viewTest) {
+
     // Everything a native view would have done by itself: the cursor, the
     // tooltip, the caret, an input method, a <select>, the scale.
     sofik_view_cdp_attach(g_view, OnCdp, nullptr);
@@ -570,6 +624,12 @@ static void OnCdp(void*, sofik_view_id, const char* message) {
     after(1500, ^{
       sofik_view_mouse_move(g_view, 50, 30, 0, 0);
       sofik_view_mouse_move(g_view, 60, 35, 0, 0);
+    });
+    after(1900, ^{
+      // A right click on the link: the host is told what is under it.
+      sofik_view_mouse_button(g_view, 60, 35, SOFIK_BUTTON_RIGHT, 0, 1,
+                              SOFIK_MOD_RIGHT_BUTTON);
+      sofik_view_mouse_button(g_view, 60, 35, SOFIK_BUTTON_RIGHT, 1, 1, 0);
     });
     after(2200, ^{ click(60, 92); });
     after(2600, ^{ sofik_view_ime_set_composition(g_view, "ol", 2, 2); });
@@ -713,6 +773,9 @@ int main(int argc, const char** argv) {
         g_host.switches = [arg substringFromIndex:11];
       } else if ([arg isEqualToString:@"--allow-media"]) {
         g_host.allowMic = YES;
+      } else if ([arg isEqualToString:@"--menu-test"]) {
+        g_host.menuTest = YES;
+        g_host.nativeView = YES;
       } else if ([arg isEqualToString:@"--devtools"]) {
         g_host.devtools = YES;
       } else if ([arg isEqualToString:@"--native-view"]) {

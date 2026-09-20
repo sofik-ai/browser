@@ -129,6 +129,10 @@ class HeadlessContentBrowserClient : public content::ContentBrowserClient {
   void OnNetworkServiceCreated(
       ::network::mojom::NetworkService* network_service) override;
 
+  // Sofik: context menus, see HeadlessWebContentsViewDelegate.
+  std::unique_ptr<content::WebContentsViewDelegate> GetWebContentsViewDelegate(
+      content::WebContents* web_contents) override;
+
   // Sofik: the DevTools front end, see headless/public/sofik_devtools.h.
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
   CreateNonNetworkNavigationURLLoaderFactory(

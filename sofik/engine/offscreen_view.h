@@ -24,6 +24,7 @@
 #include "ui/gfx/geometry/size.h"
 
 namespace content {
+struct ContextMenuParams;
 class DelegatedFrameHost;
 class DelegatedFrameHostClient;
 class RenderWidgetHostImpl;
@@ -52,6 +53,8 @@ class OffscreenViewDelegate {
   virtual void OnTextInputStateChanged(bool is_editable,
                                        const gfx::Rect& caret) = 0;
   virtual void OnImeCompositionBoundsChanged(const gfx::Rect& bounds) = 0;
+  virtual void OnContextMenuRequested(
+      const content::ContextMenuParams& params) = 0;
 
  protected:
   virtual ~OffscreenViewDelegate() = default;

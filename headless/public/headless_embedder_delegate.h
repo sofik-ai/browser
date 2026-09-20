@@ -18,6 +18,8 @@ class GURL;
 namespace content {
 class FileSelectListener;
 class JavaScriptDialogManager;
+class RenderFrameHost;
+struct ContextMenuParams;
 }
 
 namespace headless {
@@ -67,6 +69,10 @@ class HEADLESS_EXPORT HeadlessEmbedderDelegate {
   // if enumerateDevices() names the devices.
   virtual bool HasMediaAccess(const url::Origin& origin,
                               blink::mojom::MediaStreamType type) = 0;
+
+  // A right click, or the keyboard's menu key. Headless shows nothing.
+  virtual void OnContextMenu(content::RenderFrameHost& frame,
+                             const content::ContextMenuParams& params) = 0;
 
   // <input type=file>. Headless on its own cancels it. Return true to take
   // the request; `listener` must then be answered, FileSelected() or

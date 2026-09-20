@@ -4,6 +4,7 @@
 
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -123,6 +124,14 @@ bool OffscreenContentsView::CloseTabAfterEventTrackingIfNeeded() {
 content::BackForwardTransitionAnimationManager*
 OffscreenContentsView::GetBackForwardTransitionAnimationManager() {
   return nullptr;
+}
+
+void OffscreenContentsView::ShowContextMenu(
+    content::RenderFrameHost& render_frame_host,
+    const content::ContextMenuParams& params) {
+  if (delegate_) {
+    delegate_->OnContextMenuRequested(params);
+  }
 }
 
 void OffscreenContentsView::StartDragging(

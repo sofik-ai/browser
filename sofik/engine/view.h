@@ -80,6 +80,9 @@ class View : public content::WebContentsObserver,
   void Reload(bool ignore_cache);
   void Stop();
   void SetZoom(double level);
+  void Edit(uint32_t command);
+  // A link the person chose to open from a menu: the host decides where.
+  void OpenLinkFromMenu(const std::string& url);
 
   void MouseMove(int x, int y, uint32_t modifiers, bool left_the_view);
   void MouseButton(int x, int y, sofik_mouse_button button, bool is_up,
@@ -118,6 +121,8 @@ class View : public content::WebContentsObserver,
   void ReportLoadingState();
   // Tells the host, then asks the engine to delete this view.
   void CloseSoon();
+  // The plain menu of a native view whose host shows none of its own.
+  void ShowNativeContextMenu(const content::ContextMenuParams& params);
 
   // content::WebContentsObserver:
   void RenderViewReady() override;
@@ -167,6 +172,8 @@ class View : public content::WebContentsObserver,
                               PermissionCallback callback) override;
   bool OnFileChooser(scoped_refptr<content::FileSelectListener> listener,
                      const blink::mojom::FileChooserParams& params) override;
+  void OnContextMenu(content::RenderFrameHost& frame,
+                     const content::ContextMenuParams& params) override;
   bool OnMediaAccessRequested(const content::MediaStreamRequest& request,
                               content::MediaResponseCallback callback) override;
   bool HasMediaAccess(const url::Origin& origin,
@@ -196,6 +203,8 @@ class View : public content::WebContentsObserver,
   void OnTextInputStateChanged(bool is_editable,
                                const gfx::Rect& caret) override;
   void OnImeCompositionBoundsChanged(const gfx::Rect& bounds) override;
+  void OnContextMenuRequested(
+      const content::ContextMenuParams& params) override;
 
   // content::DevToolsAgentHostClient:
   void DispatchProtocolMessage(content::DevToolsAgentHost* host,

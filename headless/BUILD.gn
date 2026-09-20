@@ -338,6 +338,8 @@ source_set("headless_browser") {
     "lib/browser/headless_notification_service.h",
     "lib/browser/headless_permission_manager.cc",
     "lib/browser/headless_permission_manager.h",
+    "lib/browser/headless_web_contents_view_delegate.cc",
+    "lib/browser/headless_web_contents_view_delegate.h",
     "lib/browser/headless_platform_delegate.h",
     "lib/browser/headless_platform_event_source.cc",
     "lib/browser/headless_platform_event_source.h",

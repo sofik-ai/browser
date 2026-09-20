@@ -39,6 +39,7 @@
 #include "headless/lib/browser/headless_browser_context_impl.h"
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
+#include "headless/lib/browser/headless_web_contents_view_delegate.h"
 #include "headless/lib/browser/sofik_devtools_url_loader_factory.h"
 #include "headless/public/headless_embedder_delegate.h"
 #include "headless/public/sofik_devtools.h"
@@ -562,6 +563,15 @@ void HeadlessContentBrowserClient::CreateThrottlesForNavigation(
         SafeSearchFactory::GetForBrowserContext(context)));
   }
 #endif  // defined(HEADLESS_USE_POLICY)
+}
+
+std::unique_ptr<content::WebContentsViewDelegate>
+HeadlessContentBrowserClient::GetWebContentsViewDelegate(
+    content::WebContents* web_contents) {
+  if (!HeadlessBrowser::UsesBrowserIdentity()) {
+    return nullptr;
+  }
+  return std::make_unique<HeadlessWebContentsViewDelegate>(web_contents);
 }
 
 mojo::PendingRemote<network::mojom::URLLoaderFactory>

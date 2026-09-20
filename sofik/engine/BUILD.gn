@@ -30,6 +30,7 @@ executable("sofik_engine_probe") {
     "//media/capture:capture_base",
     "//media/capture/mojom:video_capture",
     "//mojo/public/cpp/bindings",
+    "//services/viz/privileged/mojom/compositing",
     "//skia",
     "//ui/gfx",
     "//ui/gfx/codec",
@@ -101,6 +102,7 @@ shared_library("sofik_engine") {
     "//components/download/public/common:public",
     "//components/input",
     "//components/os_crypt/common:switches",
+    "//components/viz/client",
     "//components/viz/common",
     "//components/viz/host",
     "//content/public/app",
@@ -115,6 +117,7 @@ shared_library("sofik_engine") {
     "//net",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
+    "//services/viz/privileged/mojom/compositing",
     "//third_party/blink/public/common",
     "//ui/base",
     "//ui/base/cursor",
@@ -127,6 +130,7 @@ shared_library("sofik_engine") {
     "//ui/gfx",
     "//ui/gfx/geometry",
     "//ui/gl",
+    "//ui/latency",
     "//url",
   ]
   if (is_mac) {

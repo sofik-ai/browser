@@ -663,6 +663,62 @@ def package_engine(dest: Path) -> tuple[Path, str]:
     return archive, version
 
 
+def used_inputs(config: str, env) -> list[str]:
+    """Every file of the tree this build read, as the build itself tells it.
+
+    This is what lets the tree shrink. It was pruned against lists taken on a
+    Mac, where the Linux and Windows graphs could be generated but never
+    compiled, so nobody knew which headers those platforms include -- and
+    every header was kept: 62,000 of them that no build is known to read. A
+    finished build knows. Three sources, as in tool/chromium/inputs.py:
+
+      siso query inputs   what the build files declare
+      siso query deps     the headers the compiler really opened
+      **/*.d              depfiles of actions (grit alone reads 11,000 files)
+    """
+    import re
+    directory = out_dir(config)
+    out_root = (SRC / directory).resolve()
+    src_root = SRC.resolve()
+    found: set[str] = set()
+
+    def keep(path: Path) -> None:
+        try:
+            path = path.resolve()
+            if out_root == path or out_root in path.parents:
+                return
+            found.add(path.relative_to(src_root).as_posix())
+        except (ValueError, OSError):
+            pass
+
+    targets = ninja_command(config)[5:]
+    for query, args in (("inputs", targets), ("deps", [])):
+        command = ["siso", "query", query, "-C", directory, *args]
+        result = subprocess.run(
+            " ".join(command) if IS_WINDOWS else command, cwd=str(SRC),
+            env=env, shell=IS_WINDOWS, capture_output=True, text=True,
+            errors="replace")
+        for line in result.stdout.splitlines():
+            # `deps` prints "target: ..." then its inputs indented.
+            if query == "deps" and not line.startswith((" ", "\t")):
+                continue
+            line = line.strip()
+            if line:
+                keep(out_root / line)
+    for depfile in out_root.rglob("*.d"):
+        try:
+            text = depfile.read_text(errors="replace")
+        except OSError:
+            continue
+        _, _, deps = text.replace("\\\n", " ").partition(":")
+        for token in re.findall(r"(?:\\ |\S)+", deps):
+            token = token.replace("\\ ", " ")
+            if token.endswith(":"):
+                continue
+            keep(Path(token) if os.path.isabs(token) else out_root / token)
+    return sorted(found)
+
+
 def cmd_package(args: argparse.Namespace) -> None:
     require_tree()
     dest = Path(args.dest).resolve()
@@ -672,6 +728,20 @@ def cmd_package(args: argparse.Namespace) -> None:
         archive, version = package_engine(dest)
     else:
         archive, version = package_cef(dest)
+
+    # What this platform's build read, published beside what it built. Never
+    # worth failing a release over: the browser is the product, the list is
+    # how the next prune is measured.
+    try:
+        import gzip
+        used = used_inputs(args.config, build_env())
+        listing = dest / f"inputs-{platform_tag()}.txt.gz"
+        with gzip.open(listing, "wt") as out:
+            out.write("\n".join(used) + "\n")
+        print(f"--> {len(used)} files read by this build -> {listing.name}",
+              flush=True)
+    except Exception as error:  # noqa: BLE001
+        print(f"--> could not list the build's inputs: {error}", flush=True)
 
     digest = sha256_of(archive)
     # The sidecar every consumer checks the download against. Written next to

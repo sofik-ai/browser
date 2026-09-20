@@ -198,6 +198,10 @@ jobs:
             || echo "Release already exists"
           gh release upload "${{ inputs.tag }}" \
             dist/*.tar.gz dist/*.sha256 dist/artifact-*.json --clobber
+          # The list of files this build read: how the next prune is measured.
+          if ls dist/inputs-*.txt.gz >/dev/null 2>&1; then
+            gh release upload "${{ inputs.tag }}" dist/inputs-*.txt.gz --clobber
+          fi
 
       - name: Record that this platform stopped
         # Only a real failure of this tree -- it does not generate, or it does

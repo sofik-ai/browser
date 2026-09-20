@@ -9,12 +9,20 @@ namespace display {
 NSScreen* GetNSScreenFromDisplayID(CGDirectDisplayID display_id) {
   for (NSScreen* screen in NSScreen.screens) {
     CGDirectDisplayID screen_display_id = kCGNullDirectDisplay;
+// Sofik: the property only exists in the macOS 26 SDK, and @available does
+// not help a compiler that has never heard of it. With an older SDK the
+// dictionary lookup, which is what the property replaced, is the only path.
+#if defined(MAC_OS_VERSION_26_0)
     if (@available(macOS 26, *)) {
       screen_display_id = screen.CGDirectDisplayID;
     } else {
       screen_display_id =
           [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
     }
+#else
+    screen_display_id =
+        [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+#endif
     if (screen_display_id == display_id) {
       return screen;
     }

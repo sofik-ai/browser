@@ -12,6 +12,12 @@
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
+// Sofik: the macOS 26 SDK renamed kCGBitmapByteOrder32Host. Same value; with
+// an older SDK only the old name exists.
+#if !defined(MAC_OS_VERSION_26_0)
+#define kCGImageByteOrder32Host kCGBitmapByteOrder32Host
+#endif
+
 namespace blink {
 
 GraphicsContextCanvas::GraphicsContextCanvas(cc::PaintCanvas* canvas,

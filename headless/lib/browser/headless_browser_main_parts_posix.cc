@@ -21,6 +21,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "headless/lib/browser/headless_browser_impl.h"
+#include "headless/public/headless_browser.h"
 
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
 #include "components/dbus/thread_linux/dbus_thread_linux.h"
@@ -157,8 +158,15 @@ class BrowserShutdownHandler {
 }  // namespace
 
 void HeadlessBrowserMainParts::PostCreateMainMessageLoop() {
-  BrowserShutdownHandler::Install(base::BindOnce(
-      &HeadlessBrowserImpl::ShutdownWithExitCode, browser_->GetWeakPtr()));
+  // Sofik: SIGTERM, SIGINT and SIGHUP belong to the process, and an embedded
+  // browser is a guest in somebody else's. Taking them over there is worse
+  // than rude: the handler asks headless to quit a run loop the embedder never
+  // entered, so the signal is swallowed and the application cannot be
+  // terminated by anything short of SIGKILL.
+  if (!HeadlessBrowser::UsesBrowserIdentity()) {
+    BrowserShutdownHandler::Install(base::BindOnce(
+        &HeadlessBrowserImpl::ShutdownWithExitCode, browser_->GetWeakPtr()));
+  }
 
 #if BUILDFLAG(IS_LINUX)
 

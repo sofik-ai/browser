@@ -111,6 +111,9 @@ CIPD_DEPS = {
         "src/buildtools/linux64",
         "src/third_party/ninja",
         "src/third_party/siso/cipd",
+        # Blink's generated lookup tables (CSS properties, HTML entities). macOS
+        # and Windows find a gperf elsewhere; on Linux the build names this one.
+        "src/third_party/gperf/cipd",
     ],
     "mac": [
         "src/buildtools/mac",

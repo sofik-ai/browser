@@ -244,9 +244,9 @@ headless::HeadlessBrowserContext* Engine::ContextFor(const char* profile) {
     // The name is the host's, never a page's, but it still becomes a path.
     base::FilePath leaf = base::FilePath(name).BaseName();
     builder.SetIncognitoMode(false);
-    builder.SetUserDataDir(
-        base::FilePath(cache_root_).Append(FILE_PATH_LITERAL("profiles"))
-            .Append(leaf));
+    // Directly under the root, under the host's own name for it: the host is
+    // who deletes the directory to clear a profile.
+    builder.SetUserDataDir(base::FilePath(cache_root_).Append(leaf));
   }
   headless::HeadlessBrowserContext* context = builder.Build();
   headless::HeadlessBrowserContextImpl::From(context)

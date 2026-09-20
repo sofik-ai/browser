@@ -221,8 +221,9 @@ typedef struct sofik_view_config {
   const char* url;
   int width, height;          /* in DIPs */
   int frame_rate;             /* frames per second, 60 if 0 */
-  /* Storage partition: cookies, cache, local storage. One directory per
-   * profile under cache_root; NULL is an off-the-record profile. */
+  /* Storage partition: cookies, cache, local storage. The directory
+   * cache_root/<profile>, which the host may delete, while no view uses it, to
+   * clear the profile; NULL is an off-the-record profile. */
   const char* profile;
   int prefer_gpu_frames;      /* shared texture instead of pixels */
   /* Pixels per DIP of this view: the density of whatever the host composites

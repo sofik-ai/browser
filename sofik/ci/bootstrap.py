@@ -205,6 +205,45 @@ def read_deps(root: Path) -> dict:
     return scope
 
 
+# Binaries gclient fetches with a *hook* rather than a dep: a .sha1 file in the
+# tree names an object in a bucket (download_from_google_storage). Nothing
+# here runs hooks, so the ones a build needs are listed: on Windows every .rc
+# in the tree is compiled by Chromium's own rc.exe, and without it each of
+# them fails with "[WinError 2] The system cannot find the file specified".
+SHA1_DOWNLOADS = {
+    "win": [("chromium-browser-clang/rc", "build/toolchain/win/rc/win/rc.exe")],
+    "mac": [],
+    "linux": [],
+}
+
+
+def fetch_sha1_downloads(root: Path, plat: str, check: bool) -> bool:
+    import hashlib
+    ok = True
+    for bucket, relative in SHA1_DOWNLOADS[plat]:
+        target = root.joinpath(*relative.split("/"))
+        want = Path(str(target) + ".sha1").read_text().strip()
+        have = (hashlib.sha1(target.read_bytes()).hexdigest()  # noqa: S324
+                if target.is_file() else "")
+        if have == want:
+            log(f"  have {relative} <- {want[:12]}")
+            continue
+        if check:
+            log(f"  MISS {relative} <- {want[:12]}")
+            ok = False
+            continue
+        log(f"  get  {relative} <- {bucket}/{want[:12]}")
+        partial = Path(str(target) + ".partial")
+        with urllib.request.urlopen(f"{GCS_HOST}/{bucket}/{want}") as reply:
+            data = reply.read()
+        if hashlib.sha1(data).hexdigest() != want:  # noqa: S324
+            raise Problem(f"{relative}: the download does not match its sha1")
+        partial.write_bytes(data)
+        partial.replace(target)
+        target.chmod(0o755)
+    return ok
+
+
 def fetch_devtools_tools(root: Path, plat: str, cpu: str, check: bool) -> bool:
     devtools = root.joinpath(*DEVTOOLS_DIR.split("/"))
     if not (devtools / "DEPS").is_file():
@@ -599,6 +638,7 @@ def main(argv) -> int:
         entry = scope["deps"][deps_path]
         ok &= fetch_cipd(root, deps_path, entry, plat, cpu, args.check)
     ok &= fetch_devtools_tools(root, plat, cpu, args.check)
+    ok &= fetch_sha1_downloads(root, plat, args.check)
     if plat == "linux":
         ok &= fetch_sysroot(root, args.check)
 

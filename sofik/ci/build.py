@@ -368,7 +368,10 @@ def cmd_runner_setup(_: argparse.Namespace) -> None:
 
     # Outside the workspace, because the checkout clears it, and on the volume
     # that has room, because it grows to several GB.
-    scratch = roomiest / "sofik-ci"
+    # On Windows that is the root of the roomy drive. Elsewhere there is one
+    # volume and its root is not the job's to write to -- on macOS it is
+    # read-only outright -- so the home directory, which is on it.
+    scratch = (roomiest if IS_WINDOWS else Path.home()) / "sofik-ci"
     (scratch / "sccache").mkdir(parents=True, exist_ok=True)
     set_env("SCCACHE_DIR", str(scratch / "sccache"))
     set_env("SOFIK_CI_SCRATCH", str(scratch))

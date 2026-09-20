@@ -1,0 +1,15 @@
+Name: Graphy
+URL: http://code.google.com/p/graphy/
+Version: 1.0.0
+Update Mechanism: Manual
+License: Apache-2.0
+License File: LICENSE
+Security Critical: no
+Shipped: yes
+
+Description:
+Graphy is a dependency of AppEngine MapReduce.
+Graphy is a chart library for python.
+
+Local Modifications:
+Removed everything except graphy/ and LICENSE.txt.

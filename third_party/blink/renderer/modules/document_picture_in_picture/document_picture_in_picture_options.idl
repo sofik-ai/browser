@@ -1,0 +1,23 @@
+// Copyright 2022 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// https://wicg.github.io/document-picture-in-picture/#dictdef-documentpictureinpictureoptions
+
+dictionary DocumentPictureInPicturePosition {
+  required long x;
+  required long y;
+};
+
+dictionary DocumentPictureInPictureCefOptions {
+  DocumentPictureInPicturePosition position;
+  boolean resizable = true;
+};
+
+dictionary DocumentPictureInPictureOptions {
+  [EnforceRange] unsigned long long width = 0;
+  [EnforceRange] unsigned long long height = 0;
+  boolean disallowReturnToOpener = false;
+  [RuntimeEnabled=DocumentPictureInPicturePreferInitialPlacement] boolean preferInitialWindowPlacement = false;
+  [RuntimeEnabled=DocumentPictureInPictureCefOptions] DocumentPictureInPictureCefOptions cefOptions;
+};

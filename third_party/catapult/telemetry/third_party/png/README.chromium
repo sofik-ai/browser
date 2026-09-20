@@ -1,0 +1,18 @@
+Name: Pure Python PNG Reader/Writer
+Short Name: pypng
+URL: https://github.com/drj11/pypng/
+Version: N/A
+Date: 2012-09-21
+Revision: dd1797c361eafa443878b0915f767b75bd518d3b
+Update Mechanism: Manual
+License: MIT
+Security Critical: no
+Shipped: no
+
+Description:
+A png encoder and decoder for python. Used by telemetry to decode screenshots
+captured via the gpuBenchmark.windowSnapshot API, which are returned as
+Base64-encoded PNG files.
+
+Local Modifications:
+Updated for Python 3 compatibility.

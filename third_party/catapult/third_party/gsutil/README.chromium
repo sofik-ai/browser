@@ -1,0 +1,43 @@
+Name: gsutil
+URL: https://github.com/GoogleCloudPlatform/gsutil
+Version: 5.36
+Revision: c1e99521cebd61bab214b67a00372051cb01fb7b
+Update Mechanism: Manual
+License: Apache-2.0
+License File: LICENSE
+Security Critical: no
+Shipped: no
+
+Description:
+gsutil is a Python application that allow access Google Cloud Storage from
+the command line. gsutil can do a wide range of bucket and object
+management tasks, including:
+* Creating and deleting buckets.
+* Uploading, downloading, and deleting objects.
+* Listing buckets and objects.
+* Moving, copying, and renaming objects.
+* Editing object and bucket ACLs.
+
+Local Modifications:
+* Added README.chromium, BUILD.gn, gsutil.bat
+* Added third_party/google-auth-library-python/google/__init__.py
+* Removed docs, test, and samples (see update steps)
+
+Steps to update:
+git clone https://github.com/GoogleCloudPlatform/gsutil foo
+cd foo
+git checkout TAG
+git submodules init
+git submodules update
+cd ..
+cp foo/* .
+rm -rf third_party gslib/vendored
+cp -r foo/third_party .
+cp -r foo/gslib/vendored gslib
+rm -rf foo
+rm -rf **/docs **/samples
+rm -rf **/tests **/test **/tests_async **/system_tests **/*_test.py
+rm -rf **/.* gslib/commands/test.py third_party/mock third_party/funcsigs
+Remove "mock" and "funcsigs" from gsutil.py
+touch third_party/google-auth-library-python/google/__init__.py
+git add .

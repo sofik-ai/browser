@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<!--
+Copyright 2017 The Chromium Authors. All rights reserved.
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
+
+<link rel="import" href="/components/app-route/app-route.html">
+<link rel="import" href="/components/iron-ajax/iron-ajax.html">
+<link rel="import" href="/components/iron-icon/iron-icon.html">
+<link rel="import" href="/components/iron-icons/iron-icons.html">
+<link rel="import" href="/components/paper-fab/paper-fab.html">
+<link rel="import" href="/components/paper-toast/paper-toast.html">
+<link rel="import" href="/components/paper-tooltip/paper-tooltip.html">
+
+<link rel="import" href="/elements/base-style.html">
+<link rel="import" href="/elements/cancel-job-dialog.html">
+<link rel="import" href="/elements/job-page/change-details.html">
+<link rel="import" href="/elements/job-page/exception-details.html">
+<link rel="import" href="/elements/job-page/job-chart.html">
+<link rel="import" href="/elements/job-page/job-details.html">
+<link rel="import" href="/elements/job-page/job-menu-fab.html">
+<link rel="import" href="/elements/loading-wrapper.html">
+<link rel="import" href="/elements/results2-frame.html">
+
+<dom-module id="job-page">
+  <template>
+    <style include="base-style">
+      #failed {
+        background: var(--paper-red-50);
+        color: var(--paper-red-500);
+        cursor: pointer;
+      }
+
+      #failed-tooltip {
+        max-width: 50em;
+        white-space: pre-wrap;
+      }
+
+      #completed {
+        background: var(--paper-green-50);
+        color: var(--paper-green-500);
+      }
+
+      #running {
+        background: var(--paper-indigo-50);
+        color: var(--paper-indigo-500);
+      }
+
+      #queued {
+        background: var(--paper-grey-50);
+        color: var(--paper-grey-500);
+      }
+
+      #cancelled {
+        background: var(--paper-orange-50);
+        color: var(--paper-orange-500);
+      }
+
+      h1 {
+        margin-bottom: 0.1em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #layout {
+        display: grid;
+        grid-auto-columns: 1fr;
+        grid-column-gap: 24px;
+        grid-row-gap: 24px;
+        grid-template-rows: max-content;
+        margin-top: 24px;
+      }
+
+      #details-column {
+        grid-column: 1 / 3;
+        grid-row: 1 / 3;
+      }
+
+      #results {
+        grid-column: 3 / 9;
+      }
+
+      #change-a {
+        grid-column: 3 / 6;
+      }
+
+      #change-a > div {
+        background-color: var(--paper-indigo-500);
+        height: 8px;
+      }
+
+      #change-b {
+        grid-column: 6 / 9;
+      }
+
+      #change-b > div {
+        background-color: var(--paper-pink-a200);
+        height: 8px;
+      }
+
+      #exception {
+        color: var(--paper-grey-500);
+        white-space: pre-wrap;
+      }
+
+      /* Gemini Analysis Styles */
+      #gemini-card {
+        background: white;
+        border: 1px solid var(--paper-grey-300);
+        border-radius: 4px;
+        margin: 24px 0;
+        padding: 0; /* Padding moved to inner elements */
+        box-shadow: 0 2px 2px 0 rgba(0, 0, 0, 0.14),
+                    0 1px 5px 0 rgba(0, 0, 0, 0.12),
+                    0 3px 1px -2px rgba(0, 0, 0, 0.2);
+        max-height: 500px;
+        transition: max-height 0.3s ease-in-out;
+        overflow: hidden;
+      }
+
+      #gemini-card[collapsed] {
+        max-height: 48px; /* Height of header only */
+      }
+
+      #gemini-header {
+        display: flex;
+        align-items: center;
+        padding: 12px 16px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      #gemini-header h2 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 500;
+        color: var(--paper-indigo-500);
+        flex-grow: 1;
+      }
+
+      .gemini-icon {
+        width: 24px;
+        height: 24px;
+        margin-right: 8px;
+        background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%233F51B5"><path d="M12 2L9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5z"/></svg>');
+        background-repeat: no-repeat;
+        background-position: center;
+      }
+
+      .toggle-icon {
+        transition: transform 0.3s;
+      }
+
+      #gemini-card[collapsed] .toggle-icon {
+        transform: rotate(-90deg);
+      }
+
+      #gemini-content-wrapper {
+        padding: 0 16px 16px 16px;
+        overflow-y: auto;
+        max-height: 430px;
+      }
+
+      #gemini-content {
+        line-height: 1.6;
+        color: var(--paper-grey-800);
+      }
+
+      #gemini-content table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 16px 0;
+      }
+
+      #gemini-content th, #gemini-content td {
+        border: 1px solid var(--paper-grey-300);
+        padding: 8px 12px;
+        text-align: left;
+      }
+
+      #gemini-content th {
+        background-color: var(--paper-grey-100);
+        font-weight: 500;
+      }
+
+      #gemini-content tr:nth-child(even) {
+        background-color: var(--paper-grey-50);
+      }
+
+      #gemini-content pre {
+        background-color: var(--paper-grey-100);
+        padding: 12px;
+        border-radius: 4px;
+        overflow-x: auto;
+        font-family: monospace;
+        margin: 16px 0;
+        white-space: pre;
+      }
+
+      #gemini-content code {
+        font-family: monospace;
+        background-color: var(--paper-grey-100);
+        padding: 2px 4px;
+        border-radius: 2px;
+      }
+
+      .loading-container {
+        display: flex;
+        align-items: center;
+        color: var(--paper-grey-600);
+        font-style: italic;
+      }
+
+      paper-spinner {
+        margin-right: 12px;
+        width: 20px;
+        height: 20px;
+      }
+    </style>
+
+    <app-route route="{{route}}" pattern="/:jobId" data="{{routeData}}" query-params="{{queryParams}}"></app-route>
+
+    <iron-ajax
+        id="geminiRequest"
+        url="/api/job/gemini-analysis/[[job.job_id]]"
+        handle-as="json"
+        on-response="_handleGeminiResponse"
+        on-error="_handleGeminiError"
+        loading="{{geminiLoading}}">
+    </iron-ajax>
+
+    <loading-wrapper url="/api/job/[[routeData.jobId]]?o=STATE&amp;o=ESTIMATE" response="{{job}}">
+      <h1>
+        <template is="dom-if" if="[[completed(job)]]">
+          <span id="complete" class="badge">Completed</span>
+        </template>
+        <template is="dom-if" if="[[failed(job)]]">
+          <span id="failed" class="badge">Error</span>
+          <paper-tooltip for="failed" animation-delay="0">
+            <div id="failed-tooltip">[[exceptionMessage(job.exception)]]</div>
+          </paper-tooltip>
+        </template>
+        <template is="dom-if" if="[[running(job)]]">
+          <span id="running" class="badge">Running</span>
+          <cancel-job-dialog job="[[job]]"
+                             hidden$=[[!user]]
+                             user="[[user]]"
+                             client="{{client}}"></cancel-job-dialog>
+        </template>
+        <template is="dom-if" if="[[cancelled(job)]]">
+          <span id="cancelled" class="badge">Cancelled</span>
+          <paper-tooltip for="cancelled" animation-delay="0">
+            <div id="cancelled-tooltip">[[job.cancel_reason]]</div>
+          </paper-tooltip>
+        </template>
+        <template is="dom-if" if="[[queued(job)]]">
+          <span id="queued" class="badge">Queued</span>
+          <cancel-job-dialog job="[[job]]"
+                             hidden$=[[!user]]
+                             user="[[user]]"
+                             client="{{client}}"></cancel-job-dialog>
+        </template>
+        [[job.name]]
+      </h1>
+      <p class="byline">
+        For [[job.user]]
+        <span class="middle-dot"></span>
+        created on [[createTime(job)]]
+        <span class="middle-dot"></span>
+        waiting time: [[queueDuration(job)]]
+        <span class="middle-dot"></span>
+        started on [[startTime(job)]]
+        <span class="middle-dot"></span>
+        running time: [[runDuration(job)]]
+      </p>
+      <p class="byline">
+        In queue: <a href="[[formatQueueUrl(job.configuration)]]">[[job.configuration]]</a>
+      </p>
+
+      <!-- Gemini Analysis Section (Staging Only) -->
+      <template is="dom-if" if="[[showGemini]]">
+        <div id="gemini-card" collapsed$="[[!geminiExpanded]]">
+          <div id="gemini-header" on-click="_toggleGemini">
+            <div class="gemini-icon"></div>
+            <h2>[[geminiTitle]]</h2>
+            <iron-icon class="toggle-icon" icon="expand-more"></iron-icon>
+          </div>
+
+          <template is="dom-if" if="[[geminiExpanded]]">
+            <div id="gemini-content-wrapper">
+              <template is="dom-if" if="[[geminiLoading]]">
+                <div class="loading-container">
+                  <paper-spinner active></paper-spinner>
+                  <span>Analyzing job results...</span>
+                </div>
+              </template>
+
+              <template is="dom-if" if="[[!geminiLoading]]">
+                <div id="gemini-content">
+                  <template is="dom-if" if="[[geminiAnalysis]]">
+                    <div id="markdown-container"></div>
+                  </template>
+                  <template is="dom-if" if="[[geminiError]]">
+                    <span style="color: var(--paper-red-500)">
+                      Failed to load analysis: [[geminiError]]
+                    </span>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <div id="layout">
+        <div id="details-column">
+          <job-details job="[[job]]" user="[[user]]"></job-details>
+        </div>
+        <div id="results">
+          <template is="dom-if" if="[[failed(job)]]">
+            <h2>Job failed</h2>
+
+            <exception-details exception="[[job.exception]]"></exception-details>
+          </template>
+          <template is="dom-if" if="[[hasEstimate(job)]]">
+            <h2 id="estimate">Estimated Job Time</h2>
+            <h3>
+              Similar jobs in the past have taken approximately [[historicMedian(job)]] &#177; [[historicStdDev(job)]] and [[historicP90(job)]] at the 90th percentile.
+            </h3>
+            <h3>
+              Currently there are [[queueAhead(job)]] jobs ahead of this one in the <a href="[[formatQueueUrl(job.configuration)]]">[[job.configuration]]</a> queue. Expected waiting time is [[queueWaitingTime(job)]].
+            </h3>
+          </template>
+          <template is="dom-if" if="[[shouldShowChart(job)]]">
+            <job-chart job="[[job]]" change-index="{{changeIndex}}"></job-chart>
+          </template>
+          <template is="dom-if" if="[[!failed(job)]]">
+            <template is="dom-if" if="[[isTryJob(job)]]">
+              <results2-frame job-id="[[job.job_id]]" client="{{client}}" user="[[user]]" limited-access="[[limitedAccess]]"></results2-frame>
+            </template>
+          </template>
+        </div>
+        <div id="change-a">
+          <div></div>
+          <change-details job="[[job]]" change-state="[[previousChangeState(job.state, changeIndex)]]" extra-args="[[getExtraArgs(job, 0)]]"></change-details>
+        </div>
+        <div id="change-b">
+          <div></div>
+          <change-details job="[[job]]" change-state="[[changeState(job.state, changeIndex)]]" extra-args="[[getExtraArgs(job, 1)]]"></change-details>
+        </div>
+      </div>
+      <job-menu-fab hidden$=[[!user]] job="[[job]]" user="[[user]]" client="{{client}}"></job-menu-fab>
+    </loading-wrapper>
+  </template>
+
+  <script>
+    'use strict';
+    Polymer({
+      is: 'job-page',
+
+      properties: {
+        job: {
+          type: Object,
+          observer: '_jobChanged',
+        },
+
+        changeIndex: {
+          type: Number
+        },
+        client: {
+          type: Object,
+          notify: true,
+        },
+        // Gemini Analysis Properties
+        geminiAnalysis: {
+          type: String,
+          value: null,
+          observer: '_renderMarkdown'
+        },
+
+        geminiError: {
+          type: String,
+          value: null
+        },
+
+        geminiLoading: {
+          type: Boolean,
+          value: false
+        },
+
+        showGemini: {
+          type: Boolean,
+          computed: '_computeShowGemini(job, queryParams)'
+        },
+
+        geminiExpanded: {
+          type: Boolean,
+          value: false
+        },
+
+        geminiTitle: {
+          type: String,
+          computed: '_computeGeminiTitle(geminiAnalysis, geminiLoading, geminiError)'
+        },
+
+        queryParams: {
+          type: Object
+        },
+
+        limitedAccess: {
+          type: Boolean,
+          computed: '_computeLimitedAccess(queryParams)'
+        }
+      },
+
+      _toggleGemini() {
+        this.geminiExpanded = !this.geminiExpanded;
+      },
+
+      _renderMarkdown(markdown) {
+        if (!markdown) return;
+
+        // Polymer's dom-if might not have rendered the container yet.
+        const container = this.$$ ? this.$$('div#markdown-container') :
+                          this.shadowRoot ? this.shadowRoot.querySelector('#markdown-container') :
+                          document.getElementById('markdown-container');
+
+        if (!container) {
+          this.async(() => this._renderMarkdown(markdown), 100);
+          return;
+        }
+
+        // Extremely simple Markdown to HTML converter
+        let html = markdown
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+
+        // Headers
+        html = html.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
+        html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+        html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+        html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+
+        // Bold
+        html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+        // Lists
+        html = html.replace(/^\s*-\s+(.*$)/gim, '<ul><li>$1</li></ul>');
+        html = html.replace(/<\/ul>\s*<ul>/g, '');
+
+        // Tables and Code Blocks
+        const lines = html.split('\n');
+        let inTable = false;
+        let inCodeBlock = false;
+        let tableHtml = '';
+        const newLines = [];
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+
+          // Code blocks
+          if (line.startsWith('```')) {
+            if (!inCodeBlock) {
+              inCodeBlock = true;
+              newLines.push('<pre><code>');
+            } else {
+              inCodeBlock = false;
+              newLines.push('</code></pre>');
+            }
+            continue;
+          }
+
+          if (inCodeBlock) {
+            newLines.push(lines[i]); // Keep original line for code blocks
+            continue;
+          }
+
+          // Tables
+          if (line.startsWith('|') && line.endsWith('|')) {
+            if (!inTable) {
+              inTable = true;
+              tableHtml = '<table>';
+            }
+            // Skip the separator line (|---|)
+            if (line.includes('---')) continue;
+
+            const cells = line.split('|').filter(c => c.length > 0);
+            const tag = tableHtml === '<table>' ? 'th' : 'td';
+            tableHtml += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+          } else {
+            if (inTable) {
+              tableHtml += '</table>';
+              newLines.push(tableHtml);
+              inTable = false;
+            }
+            newLines.push(line);
+          }
+        }
+        if (inTable) newLines.push(tableHtml + '</table>');
+        if (inCodeBlock) newLines.push('</code></pre>');
+
+        // Join with nothing because we've already added <br> or <pre> manually
+        // Wait, better to join with <br> for non-code lines.
+        let finalHtml = '';
+        let currentInCode = false;
+        for (let i = 0; i < newLines.length; i++) {
+          if (newLines[i] === '<pre><code>') {
+            currentInCode = true;
+            finalHtml += newLines[i];
+          } else if (newLines[i] === '</code></pre>') {
+            currentInCode = false;
+            finalHtml += newLines[i];
+          } else if (currentInCode || newLines[i].startsWith('<table')) {
+            finalHtml += newLines[i] + '\n';
+          } else {
+            finalHtml += newLines[i] + '<br>';
+          }
+        }
+        container.innerHTML = finalHtml;
+      },
+
+      _computeGeminiTitle(geminiAnalysis, geminiLoading, geminiError) {
+        const base = 'Gemini Analysis (Experimental)';
+        if (geminiLoading) {
+          return base + ': Analyzing job results...';
+        }
+        if (geminiError) {
+          return base + ': Error loading analysis';
+        }
+        if (geminiAnalysis) {
+          if (geminiAnalysis.includes('No performance regressions detected')) {
+            return base + ': Regression detected: No';
+          }
+
+          if (geminiAnalysis.includes('No Gerrit patch found')) {
+            return base + ': Regression detected: Yes (No patch to analyze)';
+          }
+
+          // If we have an analysis string (that isn't one of the skip messages above),
+          // CABE has detected a regression.
+          return base + ': Regression detected: Yes';
+        }
+        return base;
+      },
+
+      _computeShowGemini(job, queryParams) {
+        // Show Gemini analysis only if job is loaded and summary=true is provided in the URL.
+        if (!job || !queryParams) return false;
+        return queryParams.summary === 'true';
+      },
+
+      _computeLimitedAccess(queryParams) {
+        return queryParams && (queryParams['limited-access'] === 'True' || queryParams['limited-access'] === 'true');
+      },
+
+      _fetchGeminiAnalysis() {
+        // Reset state
+        this.geminiAnalysis = null;
+        this.geminiError = null;
+        this.geminiExpanded = false;
+
+        // Ensure we have a job ID and the feature is enabled
+        if (!this.job || !this.showGemini) return;
+
+        // Generate the request
+        this.$.geminiRequest.generateRequest();
+      },
+
+      _handleGeminiResponse(event) {
+        const response = event.detail.response;
+        if (response && response.analysis) {
+          this.geminiAnalysis = response.analysis;
+        } else {
+          this.geminiError = "No analysis returned.";
+        }
+      },
+
+      _handleGeminiError(event) {
+        // Extract error message safely
+        const error = event.detail.error;
+        let message = "Unknown error";
+        if (event.detail.request && event.detail.request.response && event.detail.request.response.error) {
+           message = event.detail.request.response.error;
+        } else if (error && error.message) {
+           message = error.message;
+        }
+        this.geminiError = message;
+      },
+
+      getExtraArgs(job, pos) {
+        if (!this.isTryJob(job)) {
+          return null;
+        }
+        let a = job.arguments;
+        if (pos === 0) {
+          return a.base_extra_args;
+        }
+        return a.experiment_extra_args;
+      },
+
+      _jobChanged() {
+        this.setChangeIndex();
+        this._fetchGeminiAnalysis();
+      },
+
+      setChangeIndex() {
+        if (!this.job) {
+          return;
+        }
+        // TODO: Choose the largest difference, not just any difference.
+        for (let i = 0; i < this.job.state.length; ++i) {
+          if (this.job.state[i].comparisons.prev === 'different') {
+            this.set('changeIndex', i);
+            return;
+          }
+        }
+        // TODO: If no statistical difference, choose the largest delta.
+        this.set('changeIndex', this.job.state.length - 1);
+      },
+
+      isTryJob(job) {
+        if (!job) {
+          return false;
+        }
+        return !job.comparison_mode || job.comparison_mode === 'try';
+      },
+
+      exceptionMessage(exception) {
+        if (!exception) {
+          return '';
+        }
+        return exception.message;
+      },
+
+      completed(job) {
+        if (!job) {
+          return false;
+        }
+        return job.status.toLowerCase() === 'completed';
+      },
+
+      failed(job) {
+        if (!job) {
+          return false;
+        }
+        return job.status.toLowerCase() === 'failed';
+      },
+
+      running(job) {
+        if (!job) {
+          return false;
+        }
+        return job.status.toLowerCase() === 'running';
+      },
+
+      cancelled(job) {
+        if (!job) {
+          return false;
+        }
+        return job.status.toLowerCase() === 'cancelled';
+      },
+
+      queued(job) {
+        if (!job) {
+          return false;
+        }
+        return job.status.toLowerCase() === 'queued';
+      },
+
+      formatDate(dateString) {
+        /** We want to use a subset of the ISO format to keep datetimes
+          * consistent independent of the user's locale, but still present a
+          * localized date.
+          */
+        function pad(n) {
+          if (n < 10) {
+            return '0' + n;
+          }
+          return n;
+        }
+
+        const d = new Date(dateString + 'Z');
+        return d.getFullYear() +
+          '-' + pad(d.getMonth() + 1) +
+          '-' + pad(d.getDate()) +
+          ' T' + pad(d.getHours()) +
+          ':' + pad(d.getMinutes()) +
+          ':' + pad(d.getSeconds());
+      },
+
+      createTime(job) {
+        if (!job) {
+          return 'N/A';
+        }
+        return this.formatDate(job.created);
+      },
+
+      startTime(job) {
+        if (!job || job.started_time === null) {
+          return 'N/A';
+        }
+        return this.formatDate(job.started_time);
+      },
+
+      formatQueueUrl(configuration) {
+        return '/queue-stats/' + configuration;
+      },
+
+      queueAhead(job) {
+        let ahead = 0;
+        if (!this.hasEstimate(job)) {
+          return ahead;
+        }
+        for (const s of job.queue_stats.job_id_with_status) {
+          if (s.job_id == job.job_id) {
+            break;
+          }
+          ahead += 1;
+        }
+        return ahead;
+      },
+
+      queueWaitingTime(job) {
+        let normalizedWait = 0.0;
+        let count = 0;
+        if (!this.hasEstimate(job)) {
+          return 'unknown';
+        }
+        for (const s of job.queue_stats.queue_time_samples) {
+          const seconds = s[0] * 3600.0;
+          const position = s[1];
+          if (!position) {
+            continue;
+          }
+
+          normalizedWait += seconds / position;
+          count += 1;
+        }
+        if (count === 0) {
+          return 'unknown';
+        }
+
+        normalizedWait /= count;
+
+        const currentPosition = this.queueAhead(job);
+
+        return this.formatTimedelta(normalizedWait * currentPosition);
+      },
+
+      formatTimedelta(seconds) {
+        let h = Math.floor(seconds / 3600);
+        let m = Math.floor((seconds % 3600) / 60);
+
+        if (h < 10) {
+          h = '0' + h;
+        }
+        if (m < 10) {
+          m = '0' + m;
+        }
+        return h + ':' + m + ' hours';
+      },
+
+      hasEstimate(job) {
+        return job && 'estimate' in job;
+      },
+
+      historicMedian(job) {
+        if (!this.hasEstimate(job)) {
+          return 'unknown';
+        }
+        return this.formatTimedelta(job.estimate.timings[0]);
+      },
+
+      historicStdDev(job) {
+        if (!this.hasEstimate(job)) {
+          return 'unknown';
+        }
+        return this.formatTimedelta(job.estimate.timings[1]);
+      },
+
+      historicP90(job) {
+        if (!this.hasEstimate(job)) {
+          return 'unknown';
+        }
+        return this.formatTimedelta(job.estimate.timings[2]);
+      },
+
+      formatDuration(durationMs) {
+        const seconds = durationMs / 1000;
+        if (seconds < 60) {
+          return seconds.toFixed(1) + ' seconds';
+        }
+
+        const minutes = durationMs / (1000 * 60);
+        if (minutes < 60) {
+          return minutes.toFixed(1) + ' minutes';
+        }
+
+        const hours = durationMs / (1000 * 60 * 60);
+        return hours.toFixed(1) + ' hours';
+      },
+
+      queueDuration(job) {
+        if (!job) {
+          return 'unknown';
+        }
+        const created = new Date(job.created + 'Z');
+
+        if (job.started_time === null) {
+          if (this.cancelled(job)) {
+            // Since we don't have a start time, this means it was
+            // cancelled in the queue.
+            const updated = new Date(job.updated + 'Z');
+            return this.formatDuration(updated - created);
+          }
+
+          // We assume this job is still in the queue.
+          return this.formatDuration(new Date() - created);
+        }
+
+        const started = new Date(job.started_time + 'Z');
+        const durationMs = started - created;
+        return this.formatDuration(durationMs);
+      },
+
+      runDuration(job) {
+        if (!job) {
+          return 'unknown';
+        }
+
+        if (job.started_time === null) {
+          // This means we haven't started yet, so leave this 0.
+          return this.formatDuration(0);
+        }
+
+        const started = new Date(job.started_time + 'Z');
+        const updated = new Date(job.updated + 'Z');
+        const durationMs = updated - started;
+        return this.formatDuration(durationMs);
+      },
+
+      shouldShowChart(job) {
+        if (!job || !job.comparison_mode || job.comparison_mode === 'try') {
+          return false;
+        }
+        return job.state.some(state => state.result_values.length);
+      },
+
+      previousChangeState(jobState, changeIndex) {
+        return jobState[changeIndex - 1];
+      },
+
+      changeState(jobState, changeIndex) {
+        return jobState[changeIndex];
+      },
+
+      selected() {
+        this.$$('loading-wrapper').$.request.generateRequest();
+      },
+    });
+  </script>
+</dom-module>

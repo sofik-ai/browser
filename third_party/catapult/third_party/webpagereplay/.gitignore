@@ -1,0 +1,13 @@
+# Ignore binaries if/when they are added in chromium checkout.
+/cipd/
+
+# DEPS.
+buildtools
+third_party/clang-format
+third_party/golang
+
+# General macOS spam.
+*.DS_Store
+
+# Python stuff.
+__pycache__/

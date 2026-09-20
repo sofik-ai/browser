@@ -1,0 +1,209 @@
+# One time-boxed slice of one platform's build.
+#
+# A cold build of this tree is about 47,000 compiles for CEF and 29,600 for the
+# engine. On the four cores a GitHub-hosted runner gives a public repository
+# that is well past the six-hour limit on a job, and a job that hits the limit
+# is killed outright: no packaging, no cache, nothing kept.
+#
+# So the build is cut into stages, and this is one of them. Every stage does
+# the same thing -- restore the compiler cache, generate, compile until its own
+# deadline, save the cache -- and the one that reaches the end of the build
+# also packages and uploads. Stages after that are a single API call and exit.
+#
+# Nothing but the compiler cache crosses between stages by default. The output
+# directory is 11 GB for CEF and 8.6 GB for the engine, which is more than
+# these runners have room to store, let alone move twice per stage; sccache
+# replays a warm cache at roughly forty compiles a second, and that is what
+# makes starting again from an empty output directory affordable.
+
+name: build stage
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: windows64, linux64 or macosarm64
+        required: true
+        type: string
+      runner:
+        description: the runs-on label
+        required: true
+        type: string
+      stage:
+        description: which stage of the chain this is, for the logs
+        required: true
+        type: number
+      tag:
+        description: the release tag this build publishes under
+        required: true
+        type: string
+      deadline:
+        # Below the job timeout by enough to save a multi-gigabyte cache and
+        # package a distribution afterwards.
+        description: minutes to compile before stopping cleanly
+        required: true
+        type: number
+      sccache_size:
+        description: cap on the compiler cache, as sccache spells it
+        required: false
+        default: 6G
+        type: string
+      carry_out_dir:
+        description: >-
+          also carry the output directory between stages. Off by default: it is
+          several times the size of the compiler cache, and only a runner with
+          plenty of disk can hold the archive and the directory at once. On a
+          big runner it removes the code generation and the Rust compiles that
+          no compiler cache covers, which every stage otherwise repeats.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      SCCACHE_CACHE_SIZE: ${{ inputs.sccache_size }}
+      # A build that compiles for five hours never idles, but a server that
+      # exits mid-stage would silently stop caching.
+      SCCACHE_IDLE_TIMEOUT: "0"
+      # The cache travels as release assets, not through the Actions cache: see
+      # sofik/ci/cache.py for why.
+      SCCACHE_GHA_ENABLED: "false"
+      CONFIG: ${{ inputs.platform == 'macosarm64' && 'engine' || 'cef' }}
+      OUT_DIR: ${{ inputs.platform == 'macosarm64' && 'out/Engine_arm64' || 'out/Release_GN_x64' }}
+    defaults:
+      run:
+        # One shell on all three operating systems, so these steps are one
+        # implementation rather than two that drift.
+        shell: bash
+
+    steps:
+      # The scripts, and nothing else. Answering "is there still work to do?"
+      # must not cost the seven gigabytes and several minutes of the real
+      # checkout.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          sparse-checkout: sofik/ci
+          path: _ci
+
+      - name: Keep the scripts outside the workspace
+        # The full checkout clears the workspace, _ci included, and the steps
+        # that run before and after it still need these.
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci"
+          cp -R _ci/sofik "$RUNNER_TEMP/ci/"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Is this platform already settled?
+        id: status
+        run: >-
+          python "$RUNNER_TEMP/ci/sofik/ci/status.py" check
+          --tag "${{ inputs.tag }}" --platform "${{ inputs.platform }}"
+
+      # Deletes the preinstalled SDKs, moves the workspace onto the volume
+      # that has room (Windows gives the job a 14 GB disk and keeps the 80 GB
+      # one for itself), and exports SCCACHE_DIR somewhere the checkout below
+      # will not clear. All of it before the checkout, because the checkout is
+      # the first thing that does not fit.
+      - name: Make the runner big enough
+        if: steps.status.outputs.settled == ''
+        run: python "$RUNNER_TEMP/ci/sofik/ci/build.py" runner-setup
+
+      # fetch-depth: 1, but the history that is left has to stay: depot_tools
+      # locates the tree by asking git for its top level, so a checkout without
+      # .git is a checkout where gn and autoninja do not work.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: steps.status.outputs.settled == ''
+        with:
+          fetch-depth: 1
+
+      - name: Toolchains
+        if: steps.status.outputs.settled == ''
+        # The only thing CI downloads. The source is never fetched: this
+        # repository is Sofik's browser, not a mirror of upstream.
+        run: python sofik/ci/bootstrap.py
+
+      - name: depot_tools on PATH
+        if: steps.status.outputs.settled == ''
+        run: echo "${{ github.workspace }}/third_party/depot_tools" >> "$GITHUB_PATH"
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        if: steps.status.outputs.settled == ''
+
+      - name: Restore the compiler cache
+        if: ${{ steps.status.outputs.settled == '' && env.SCCACHE_DIR != '' }}
+        run: >-
+          python sofik/ci/cache.py restore
+          --name "sccache-${{ inputs.platform }}" --dir "$SCCACHE_DIR"
+
+      - name: Restore the output directory
+        if: steps.status.outputs.settled == '' && inputs.carry_out_dir
+        run: >-
+          python sofik/ci/cache.py restore
+          --name "out-${{ inputs.platform }}" --dir "$OUT_DIR"
+
+      - name: Generate
+        if: steps.status.outputs.settled == ''
+        run: python sofik/ci/build.py gen --config "$CONFIG"
+
+      - name: Compile
+        id: build
+        if: steps.status.outputs.settled == ''
+        run: >-
+          python sofik/ci/build.py build --config "$CONFIG"
+          --deadline ${{ inputs.deadline }}
+
+      # Even after a failure: the compiles that did succeed are worth keeping,
+      # and this is the only thing this job produces that the next one can use.
+      - name: Save the compiler cache
+        # env.SCCACHE_DIR is set by runner-setup; without that step there is no
+        # cache directory, and no directory must never mean "the workspace".
+        if: ${{ !cancelled() && steps.status.outputs.settled == '' && env.SCCACHE_DIR != '' }}
+        run: >-
+          python sofik/ci/cache.py save
+          --name "sccache-${{ inputs.platform }}" --dir "$SCCACHE_DIR"
+
+      - name: Save the output directory
+        if: ${{ !cancelled() && steps.status.outputs.settled == '' && inputs.carry_out_dir }}
+        run: >-
+          python sofik/ci/cache.py save
+          --name "out-${{ inputs.platform }}" --dir "$OUT_DIR"
+
+      - name: Package
+        if: steps.build.outputs.complete == 'true'
+        run: python sofik/ci/build.py package --config "$CONFIG" --dest dist
+
+      - name: Publish
+        if: steps.build.outputs.complete == 'true'
+        run: |
+          # Checked before the release exists: a release published without its
+          # build is worse than no release.
+          ls dist/*.tar.gz
+          gh release create "${{ inputs.tag }}" \
+            --title "Release ${{ inputs.tag }}" \
+            --generate-notes \
+            --latest \
+            || echo "Release already exists"
+          gh release upload "${{ inputs.tag }}" \
+            dist/*.tar.gz dist/*.sha256 dist/artifact-*.json --clobber
+
+      - name: Record that this platform stopped
+        # Only a real build failure, never the deadline and never a flaky
+        # checkout: it tells the remaining stages of this platform not to
+        # spend five hours each reaching the same broken edge.
+        if: ${{ failure() && steps.build.outcome == 'failure' }}
+        run: >-
+          python "$RUNNER_TEMP/ci/sofik/ci/status.py" fail
+          --tag "${{ inputs.tag }}" --platform "${{ inputs.platform }}"
+          --stage "${{ inputs.stage }}"

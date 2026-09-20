@@ -1,0 +1,267 @@
+# Builds Sofik's browser for Windows x64, macOS arm64 and Linux x64 and
+# publishes the results as assets of a GitHub Release.
+#
+# What each platform produces:
+#
+#   windows64    a CEF minimal binary distribution, exactly what the espacial
+#   linux64      repository's third_party/webview_cef/third/download.cmake
+#                installs, packed as cef_<tag>_<version>.tar.gz
+#   macosarm64   SofikEngine.framework, what the Browser Card runs on macOS
+#
+# Every asset carries a .sha256 beside it, and the release carries one
+# artifacts.json: version, url and digest per tag, in the shape
+# third_party/webview_cef/cef_artifact.json expects, so moving the app to a new
+# browser is a file copy.
+#
+# The shape of it -- workflow_dispatch plus push to main, contents: write,
+# actions pinned by commit, `gh release create || true` then `gh release upload
+# --clobber`, GITHUB_TOKEN and no other secret -- is the espacial repository's
+# .github/workflows/ci.yml. What is different is the size of the thing being
+# built: one job cannot compile Chromium in six hours on four cores, so each
+# platform is a chain of stage jobs that hand a compiler cache to one another.
+# .github/workflows/build-stage.yml is one link of that chain, and
+# sofik/ci/cache.py explains how the cache travels.
+#
+# The defaults aim at GitHub-hosted runners and are honest about the odds: 4
+# vCPU and 14 GB of free disk (3 vCPU and 7 GB of RAM on macOS) is not a
+# machine anyone would choose to build Chromium on. The *_runner inputs exist
+# so the same workflow runs on bigger self-hosted runners, where one stage is
+# enough.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: stage jobs per platform (each compiles for `deadline` minutes)
+        required: false
+        default: 4
+        type: number
+      deadline:
+        description: minutes a stage compiles before stopping to save its cache
+        required: false
+        default: 315
+        type: number
+      sccache_size:
+        description: cap on each platform's compiler cache
+        required: false
+        default: 6G
+        type: string
+      carry_out_dir:
+        description: carry the output directory between stages (needs a big runner)
+        required: false
+        default: false
+        type: boolean
+      linux_runner:
+        required: false
+        default: ubuntu-24.04
+        type: string
+      windows_runner:
+        # 2025 rather than latest: the build wants Windows SDK 10.0.26100, and
+        # the older image does not have it.
+        required: false
+        default: windows-2025
+        type: string
+      macos_runner:
+        required: false
+        default: macos-15
+        type: string
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      stages: ${{ steps.plan.outputs.stages }}
+      deadline: ${{ steps.plan.outputs.deadline }}
+      sccache_size: ${{ steps.plan.outputs.sccache_size }}
+      carry_out_dir: ${{ steps.plan.outputs.carry_out_dir }}
+    steps:
+      # The scripts and the version file. A full checkout of this tree is
+      # several gigabytes, and this job reads four lines.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            sofik/ci
+            chrome/VERSION
+
+      - name: Release tag
+        id: tag
+        # v149.0.7827.201-sofik.<run>: the Chromium the browser is, and which
+        # build of it this is.
+        run: python sofik/ci/build.py tag --run-number "${{ github.run_number }}"
+
+      - name: Plan
+        id: plan
+        # A push to main takes the defaults; the inputs only exist on a manual
+        # run, where they are the knobs for a slow day or a big runner.
+        env:
+          LINUX: ${{ inputs.linux_runner || 'ubuntu-24.04' }}
+          WINDOWS: ${{ inputs.windows_runner || 'windows-2025' }}
+          MACOS: ${{ inputs.macos_runner || 'macos-15' }}
+          STAGES: ${{ inputs.stages || 4 }}
+          DEADLINE: ${{ inputs.deadline || 315 }}
+          SCCACHE_SIZE: ${{ inputs.sccache_size || '6G' }}
+          CARRY_OUT_DIR: ${{ inputs.carry_out_dir || false }}
+        run: |
+          {
+            printf 'matrix={"include":['
+            printf '{"platform":"linux64","runner":"%s"},' "$LINUX"
+            printf '{"platform":"windows64","runner":"%s"},' "$WINDOWS"
+            printf '{"platform":"macosarm64","runner":"%s"}]}\n' "$MACOS"
+            echo "stages=$STAGES"
+            echo "deadline=$DEADLINE"
+            echo "sccache_size=$SCCACHE_SIZE"
+            echo "carry_out_dir=$CARRY_OUT_DIR"
+          } >> "$GITHUB_OUTPUT"
+
+  # The chain. Stage N restores what stage N-1 left in the compiler cache and
+  # compiles for another `deadline` minutes; whichever stage reaches the end of
+  # the build packages and publishes, and the stages after it cost one API call
+  # each (see sofik/ci/status.py).
+  #
+  # `!cancelled()` rather than `success()`: the platforms are independent, and
+  # one of them failing or running out of time must not stop the other two.
+  # A platform that failed for a real reason marks itself, and the stages after
+  # it skip on their own.
+  stage-1:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/build-stage.yml
+    with:
+      platform: ${{ matrix.platform }}
+      runner: ${{ matrix.runner }}
+      stage: 1
+      tag: ${{ needs.prepare.outputs.tag }}
+      deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
+      sccache_size: ${{ needs.prepare.outputs.sccache_size }}
+      carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+
+  stage-2:
+    needs: [prepare, stage-1]
+    if: ${{ !cancelled() && fromJSON(needs.prepare.outputs.stages) >= 2 }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/build-stage.yml
+    with:
+      platform: ${{ matrix.platform }}
+      runner: ${{ matrix.runner }}
+      stage: 2
+      tag: ${{ needs.prepare.outputs.tag }}
+      deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
+      sccache_size: ${{ needs.prepare.outputs.sccache_size }}
+      carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+
+  stage-3:
+    needs: [prepare, stage-2]
+    if: ${{ !cancelled() && fromJSON(needs.prepare.outputs.stages) >= 3 }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/build-stage.yml
+    with:
+      platform: ${{ matrix.platform }}
+      runner: ${{ matrix.runner }}
+      stage: 3
+      tag: ${{ needs.prepare.outputs.tag }}
+      deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
+      sccache_size: ${{ needs.prepare.outputs.sccache_size }}
+      carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+
+  stage-4:
+    needs: [prepare, stage-3]
+    if: ${{ !cancelled() && fromJSON(needs.prepare.outputs.stages) >= 4 }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/build-stage.yml
+    with:
+      platform: ${{ matrix.platform }}
+      runner: ${{ matrix.runner }}
+      stage: 4
+      tag: ${{ needs.prepare.outputs.tag }}
+      deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
+      sccache_size: ${{ needs.prepare.outputs.sccache_size }}
+      carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+
+  stage-5:
+    needs: [prepare, stage-4]
+    if: ${{ !cancelled() && fromJSON(needs.prepare.outputs.stages) >= 5 }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/build-stage.yml
+    with:
+      platform: ${{ matrix.platform }}
+      runner: ${{ matrix.runner }}
+      stage: 5
+      tag: ${{ needs.prepare.outputs.tag }}
+      deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
+      sccache_size: ${{ needs.prepare.outputs.sccache_size }}
+      carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+
+  stage-6:
+    needs: [prepare, stage-5]
+    if: ${{ !cancelled() && fromJSON(needs.prepare.outputs.stages) >= 6 }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/build-stage.yml
+    with:
+      platform: ${{ matrix.platform }}
+      runner: ${{ matrix.runner }}
+      stage: 6
+      tag: ${{ needs.prepare.outputs.tag }}
+      deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
+      sccache_size: ${{ needs.prepare.outputs.sccache_size }}
+      carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+
+  manifest:
+    needs: [prepare, stage-1, stage-2, stage-3, stage-4, stage-5, stage-6]
+    # Whatever finished. Two platforms out of three is a release worth having,
+    # and the manifest says plainly which tags it has.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            sofik/ci
+            chrome/VERSION
+
+      - name: Collect what was published and describe it
+        run: |
+          gh release download "$TAG" --pattern 'artifact-*.json' \
+            --dir sidecars --clobber || true
+          if ! ls sidecars/artifact-*.json >/dev/null 2>&1; then
+            echo "No platform finished; nothing to describe."
+            exit 0
+          fi
+          python sofik/ci/build.py manifest \
+            --inputs sidecars --out artifacts.json \
+            --tag "$TAG" --repo "${{ github.repository }}"
+          gh release upload "$TAG" artifacts.json --clobber

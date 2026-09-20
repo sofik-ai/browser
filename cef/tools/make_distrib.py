@@ -1150,8 +1150,15 @@ elif platform == 'windows':
       {'path': 'libEGL.dll'},
       {'path': 'libGLESv2.dll'},
       {'path': 'v8_context_snapshot.bin'},
-      {'path': 'vk_swiftshader.dll'},
-      {'path': 'vk_swiftshader_icd.json'},
+      # Sofik: conditional, because this build does not have SwiftShader.
+      # enable_swiftshader=false (with the ANGLE and Dawn flags that go with
+      # it) is deliberate -- a page that reads "SwiftShader" as the WebGL
+      # renderer knows it is talking to something without a GPU -- and upstream
+      # never builds that configuration, so the list still demands the files.
+      # Vulkan itself is left required: its absence would be a surprise, and a
+      # surprise should stop the packaging.
+      {'path': 'vk_swiftshader.dll', 'conditional': True},
+      {'path': 'vk_swiftshader_icd.json', 'conditional': True},
       {'path': 'vulkan-1.dll'},
   ]
   pdb_files = [
@@ -1160,7 +1167,7 @@ elif platform == 'windows':
       {'path': '%s.pdb' % libcef_dll},
       {'path': 'libEGL.dll.pdb'},
       {'path': 'libGLESv2.dll.pdb'},
-      {'path': 'vk_swiftshader.dll.pdb'},
+      {'path': 'vk_swiftshader.dll.pdb', 'conditional': True},
       {'path': 'vulkan-1.dll.pdb'},
   ]
   # yapf: enable
@@ -1472,10 +1479,12 @@ elif platform == 'linux':
       {'path': libcef_so},
       {'path': 'libEGL.so'},
       {'path': 'libGLESv2.so'},
-      {'path': 'libvk_swiftshader.so'},
+      # Sofik: conditional, for the reason given in the Windows list above --
+      # this build has no SwiftShader, on purpose.
+      {'path': 'libvk_swiftshader.so', 'conditional': True},
       {'path': 'libvulkan.so.1'},
       {'path': 'v8_context_snapshot.bin'},
-      {'path': 'vk_swiftshader_icd.json'},
+      {'path': 'vk_swiftshader_icd.json', 'conditional': True},
   ]
   # yapf: enable
   if options.ozone:

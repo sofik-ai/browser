@@ -49,6 +49,10 @@ SRC = HERE.parents[1]
 # same reason, so it rides along rather than waiting for a second script.
 DEPENDENCIES = [
     # (nickname, DEPS key, what the build wants from it)
+    # Windows only, like DirectX-Headers below: a Mac checkout skips what
+    # DEPS marks checkout_win just as it skips what it marks checkout_linux.
+    ("gperf", "src/third_party/gperf",
+     "bin/gperf.exe, which generates Blink's lookup tables on Windows"),
     ("fontconfig", "src/third_party/fontconfig/src",
      "fontconfig's C sources and the fc-fontations Rust bridge"),
     ("wayland", "src/third_party/wayland/src",

@@ -42,6 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import (  # noqa: E402
+    IS_LINUX,
     IS_MAC,
     IS_WINDOWS,
     SRC,
@@ -111,6 +112,17 @@ GN_ARGS: dict[str, str] = {
 # SwiftShader. On Linux it is a real backend, so this one is not global.
 MAC_GN_ARGS: dict[str, str] = {
     "angle_enable_vulkan": "false",
+}
+
+# CEF's gn_args.py turns the sysroot OFF on Linux ("recommended for local
+# builds"), which makes the build read the host's headers and libraries: gn
+# then runs the host's cups-config, pkg-config for GTK, NSS, X11 and the rest,
+# and a machine needs some forty -dev packages before it can even generate.
+# The first Linux run stopped there. The sysroot bootstrap.py fetches is the
+# one DEPS pins, so with it on the build is the same wherever it runs and the
+# binaries are linked against the old glibc a distribution should target.
+LINUX_GN_ARGS: dict[str, str] = {
+    "use_sysroot": "true",
 }
 
 # What CEF's own configuration adds, and what the engine has to repeat.
@@ -200,7 +212,8 @@ def out_dir(config: str) -> str:
 
 
 def gn_args_for(config: str) -> dict[str, str]:
-    args = {**GN_ARGS, **(MAC_GN_ARGS if IS_MAC else {})}
+    args = {**GN_ARGS, **(MAC_GN_ARGS if IS_MAC else {}),
+            **(LINUX_GN_ARGS if IS_LINUX else {})}
     if config == "engine":
         # CEF's script adds these itself for the CEF configuration; a plain
         # `gn gen` has to carry them.

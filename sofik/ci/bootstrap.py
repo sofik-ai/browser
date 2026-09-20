@@ -129,6 +129,18 @@ CIPD_DEPS = {
     ],
 }
 
+# The DevTools front end is a checkout inside the checkout, with a DEPS of its
+# own, and the tools that bundle it are pinned there rather than in the root
+# DEPS. Both are host binaries: esbuild is an executable and rollup_libs a
+# native node module. A tree that carries the Mac's copies builds on a Mac and
+# nowhere else -- on Linux the file is there, has the right name, and is a
+# Mach-O -- so they are fetched for the host like any other tool.
+DEVTOOLS_DIR = "third_party/devtools-frontend/src"
+DEVTOOLS_CIPD_DEPS = [
+    "third_party/esbuild",
+    "third_party/rollup_libs",
+]
+
 # cipd's ${{platform}} / ${{arch}}, which we expand ourselves instead of
 # letting cipd do it: --platform win on a Mac must ask for windows packages.
 CIPD_PLATFORM = {
@@ -191,6 +203,19 @@ def read_deps(root: Path) -> dict:
     source = (root / "DEPS").read_text()
     exec(compile(source, str(root / "DEPS"), "exec"), scope)  # noqa: S102
     return scope
+
+
+def fetch_devtools_tools(root: Path, plat: str, cpu: str, check: bool) -> bool:
+    devtools = root.joinpath(*DEVTOOLS_DIR.split("/"))
+    if not (devtools / "DEPS").is_file():
+        return True
+    scope = read_deps(devtools)
+    ok = True
+    for deps_path in DEVTOOLS_CIPD_DEPS:
+        # fetch_cipd wants a path as the root DEPS writes them: "src/...".
+        ok &= fetch_cipd(root, f"src/{DEVTOOLS_DIR}/{deps_path}",
+                         scope["deps"][deps_path], plat, cpu, check)
+    return ok
 
 
 def condition_namespace(scope: dict, plat: str, cpu: str) -> Namespace:
@@ -562,6 +587,7 @@ def main(argv) -> int:
     for deps_path in cipd_paths:
         entry = scope["deps"][deps_path]
         ok &= fetch_cipd(root, deps_path, entry, plat, cpu, args.check)
+    ok &= fetch_devtools_tools(root, plat, cpu, args.check)
     if plat == "linux":
         ok &= fetch_sysroot(root, args.check)
 

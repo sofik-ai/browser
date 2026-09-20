@@ -419,10 +419,41 @@ def depot_tools_head(tools: Path) -> str:
         return ""
 
 
+def depot_tools_ready(tools: Path) -> bool:
+    """Whether depot_tools has bootstrapped itself.
+
+    Its wrappers -- gn, autoninja, siso -- are Python run by a Python of its
+    own, fetched over CIPD the first time gclient runs. Nothing here runs
+    gclient, so a fresh clone refuses every command with "python3_bin_reldir.txt
+    not found", which is how the first CI run ended.
+    """
+    return (tools / "python3_bin_reldir.txt").is_file()
+
+
+def bootstrap_depot_tools(tools: Path) -> None:
+    log("  init third_party/depot_tools (its own python, over CIPD)")
+    env = dict(os.environ, DEPOT_TOOLS_UPDATE="0")
+    if os.name == "nt":
+        # On Windows the same job is win_tools.bat's, which ensure_bootstrap
+        # leaves alone.
+        command = ["cmd", "/c", str(tools / "bootstrap" / "win_tools.bat")]
+    else:
+        command = ["bash", str(tools / "ensure_bootstrap")]
+    result = subprocess.run(command, cwd=str(tools), env=env)
+    if result.returncode != 0 or not depot_tools_ready(tools):
+        raise Problem("depot_tools did not bootstrap itself")
+
+
 def fetch_depot_tools(root: Path, check: bool) -> bool:
     tools = depot_tools_dir(root)
     if depot_tools_head(tools) == DEPOT_TOOLS_COMMIT:
-        log(f"  have third_party/depot_tools <- {DEPOT_TOOLS_COMMIT[:12]}")
+        if depot_tools_ready(tools):
+            log(f"  have third_party/depot_tools <- {DEPOT_TOOLS_COMMIT[:12]}")
+            return True
+        if check:
+            log("  MISS third_party/depot_tools (cloned, not initialised)")
+            return False
+        bootstrap_depot_tools(tools)
         return True
     if check:
         log(f"  MISS third_party/depot_tools <- {DEPOT_TOOLS_COMMIT[:12]}")
@@ -444,6 +475,7 @@ def fetch_depot_tools(root: Path, check: bool) -> bool:
     # Belt and braces with DEPOT_TOOLS_UPDATE=0: a wrapper invoked without that
     # variable would otherwise roll depot_tools off the pin mid-build.
     (tools / ".disable_auto_update").write_text("pinned by sofik/ci/bootstrap.py\n")
+    bootstrap_depot_tools(tools)
     return True
 
 

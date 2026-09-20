@@ -215,6 +215,17 @@ def fetch_devtools_tools(root: Path, plat: str, cpu: str, check: bool) -> bool:
         # fetch_cipd wants a path as the root DEPS writes them: "src/...".
         ok &= fetch_cipd(root, f"src/{DEVTOOLS_DIR}/{deps_path}",
                          scope["deps"][deps_path], plat, cpu, check)
+    if ok and not check and plat == host_platform():
+        # rollup loads its native half as the npm package
+        # @rollup/rollup-<platform>, from node_modules. Upstream puts it there
+        # with a gclient hook after every sync; nothing here runs gclient, and
+        # without it every rollup action fails with "Cannot find module
+        # @rollup/rollup-linux-x64-gnu" -- an hour into the build.
+        sync = devtools / "scripts" / "deps" / "sync_rollup_libs.py"
+        if sync.is_file():
+            log("  sync rollup's native module into node_modules")
+            subprocess.run([sys.executable, str(sync)], cwd=str(devtools),
+                           check=True)
     return ok
 
 

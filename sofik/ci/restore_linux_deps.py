@@ -53,6 +53,16 @@ DEPENDENCIES = [
     # DEPS marks checkout_win just as it skips what it marks checkout_linux.
     ("gperf", "src/third_party/gperf",
      "bin/gperf.exe, which generates Blink's lookup tables on Windows"),
+    # Found by listing every git dependency DEPS gives Linux or Windows and
+    # not the Mac, and keeping the ones living sources include from.
+    ("cros_system_api", "src/third_party/cros_system_api",
+     "D-Bus service constants; device/bluetooth and others include them"),
+    ("minigbm", "src/third_party/minigbm/src",
+     "gbm.h, for Ozone's GPU buffers on Linux"),
+    ("webauthn", "src/third_party/microsoft_webauthn/src",
+     "webauthn.h, for device/fido on Windows"),
+    ("lss", "src/third_party/lss",
+     "linux_syscall_support.h, which base, sandbox and crashpad include"),
     ("fontconfig", "src/third_party/fontconfig/src",
      "fontconfig's C sources and the fc-fontations Rust bridge"),
     ("wayland", "src/third_party/wayland/src",

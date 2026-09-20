@@ -439,6 +439,13 @@ def cmd_gen(args: argparse.Namespace) -> None:
         # x86), which is three more `gn gen` runs of a 50,000-target graph for
         # configurations nothing builds.
         "GN_OUT_CONFIGS": Path(directory).name,
+        # Only what //cef:cef reaches. A plain `gn gen` evaluates every
+        # BUILD.gn in the tree, including tools nothing here builds, and one of
+        # them fails on Linux with the arguments this browser is built with:
+        # //chrome/tools/service_discovery_sniffer asserts
+        # enable_service_discovery, which is off. It is also the graph the
+        # prune lists were taken from.
+        "GN_ARGUMENTS": "--root-target=//cef:cef",
     })
     script = "cef_create_projects.bat" if IS_WINDOWS else "./cef_create_projects.sh"
     run([script], SRC / "cef", env=env)

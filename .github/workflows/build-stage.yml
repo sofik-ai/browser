@@ -154,6 +154,7 @@ jobs:
           --name "out-${{ inputs.platform }}" --dir "$OUT_DIR"
 
       - name: Generate
+        id: gen
         if: steps.status.outputs.settled == ''
         run: python sofik/ci/build.py gen --config "$CONFIG"
 
@@ -199,10 +200,11 @@ jobs:
             dist/*.tar.gz dist/*.sha256 dist/artifact-*.json --clobber
 
       - name: Record that this platform stopped
-        # Only a real build failure, never the deadline and never a flaky
-        # checkout: it tells the remaining stages of this platform not to
-        # spend five hours each reaching the same broken edge.
-        if: ${{ failure() && steps.build.outcome == 'failure' }}
+        # Only a real failure of this tree -- it does not generate, or it does
+        # not compile -- never the deadline and never a flaky checkout: it
+        # tells the remaining stages of this platform not to spend their hours
+        # reaching the same broken edge.
+        if: ${{ failure() && (steps.gen.outcome == 'failure' || steps.build.outcome == 'failure') }}
         run: >-
           python "$RUNNER_TEMP/ci/sofik/ci/status.py" fail
           --tag "${{ inputs.tag }}" --platform "${{ inputs.platform }}"

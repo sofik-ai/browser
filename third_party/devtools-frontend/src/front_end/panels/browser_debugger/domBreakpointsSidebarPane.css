@@ -1,0 +1,84 @@
+/*
+ * Copyright 2017 The Chromium Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
+
+@scope to (devtools-widget > *) {
+  :scope {
+    overflow: auto;
+  }
+
+  .monospace {
+    font-family: var(--monospace-font-family);
+    font-size: var(--monospace-font-size);
+  }
+
+  .dom-breakpoints-container {
+    flex-grow: 1;
+  }
+
+  .breakpoint-list {
+    padding: 0 0 3px;
+    list-style-type: none;
+    margin: 0;
+  }
+
+  .breakpoint-list .dom-breakpoint > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .breakpoint-entry {
+    display: flex;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    padding: 2px 0;
+  }
+
+  .breakpoint-entry:focus-visible {
+    background-color: var(--sys-color-tonal-container);
+  }
+
+  .breakpoint-hit {
+    background-color: var(--sys-color-neutral-container);
+    color: var(--sys-color-on-surface);
+  }
+
+  .placeholder {
+    display: flex;
+    height: 100%;
+    justify-content: center;
+  }
+
+  .gray-info-message {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+  }
+}
+
+:host-context(.sources.panel) .empty-view-scroller {
+  display: none;
+}
+
+:host-context(.elements.panel) .placeholder .gray-info-message {
+  display: none;
+}
+
+@media (forced-colors: active) {
+  @scope to (devtools-widget > *) {
+    .breakpoint-entry:focus-visible,
+    .breakpoint-list .breakpoint-entry:hover {
+      forced-color-adjust: none;
+      background-color: Highlight;
+    }
+
+    .breakpoint-entry:focus-visible *,
+    .breakpoint-list .breakpoint-entry:hover * {
+      color: HighlightText;
+    }
+  }
+}

@@ -1,0 +1,47 @@
+# Copyright 2020 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("../../../scripts/build/ninja/devtools_entrypoint.gni")
+import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/typescript/typescript.gni")
+
+devtools_foundation_module("protocol_client") {
+  sources = [
+    "CDPConnection.ts",
+    "ConnectionTransport.ts",
+    "DevToolsCDPConnection.ts",
+    "InspectorBackend.ts",
+  ]
+
+  deps = [
+    "../../core/common:bundle",
+    "../../core/host:bundle",
+    "../../generated",
+    "../../generated:protocol",
+    "../platform:bundle",
+  ]
+}
+
+devtools_entrypoint("bundle") {
+  entrypoint = "protocol_client.ts"
+
+  deps = [
+    ":protocol_client",
+    "../../generated",
+  ]
+
+  visibility = [ "*" ]
+}
+
+devtools_foundation_module("unittests") {
+  testonly = true
+
+  sources = [ "InspectorBackend.test.ts" ]
+
+  deps = [
+    ":bundle",
+    "../../generated",
+    "../../testing",
+  ]
+}

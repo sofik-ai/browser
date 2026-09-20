@@ -1,0 +1,68 @@
+# Copyright 2020 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("../../../scripts/build/ninja/devtools_entrypoint.gni")
+import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/typescript/typescript.gni")
+import("../visibility.gni")
+
+devtools_foundation_module("formatter") {
+  sources = [
+    "FormatterWorkerPool.ts",
+    "ScriptFormatter.ts",
+  ]
+
+  deps = [
+    "../../core/common:bundle",
+    "../../core/platform:bundle",
+    "../../core/platform/api:bundle",
+    "../../entrypoints/formatter_worker:formatter_actions",
+    "../../models/text_utils:bundle",
+  ]
+}
+
+devtools_entrypoint("bundle") {
+  entrypoint = "formatter.ts"
+
+  deps = [
+    ":formatter",
+    "../../entrypoints/formatter_worker:worker_entrypoint",
+  ]
+
+  visibility = [
+    ":*",
+    "../../../mcp/*",
+    "../../core/sdk/*",
+    "../../entrypoints/formatter_worker/*",
+    "../../models/bindings/*",
+    "../../models/breakpoints/*",
+    "../../models/source_map_scopes/*",
+    "../../models/workspace_diff/*",
+    "../../panels/application/*",
+    "../../panels/console/*",
+    "../../panels/coverage/*",
+    "../../panels/sources/*",
+    "../../panels/utils/*",
+    "../../ui/components/text_editor/*",
+    "../../ui/legacy/components/object_ui/*",
+    "../../ui/legacy/components/source_frame/*",
+  ]
+
+  visibility += devtools_models_visibility
+}
+
+devtools_foundation_module("unittests") {
+  testonly = true
+
+  sources = [
+    "FormatterWorkerPool.test.ts",
+    "ScriptFormatter.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../core/common:bundle",
+    "../../testing",
+  ]
+}

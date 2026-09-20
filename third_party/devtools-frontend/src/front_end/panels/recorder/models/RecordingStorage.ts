@@ -1,0 +1,106 @@
+// Copyright 2023 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import * as Common from '../../../core/common/common.js';
+import * as Platform from '../../../core/platform/platform.js';
+
+import type {UserFlow} from './Schema.js';
+
+let instance: RecordingStorage|null = null;
+
+interface IdGenerator {
+  next(): string;
+}
+
+class UUIDGenerator implements IdGenerator {
+  next(): string {
+    return crypto.randomUUID();
+  }
+}
+
+export class RecordingStorage {
+  #recordingsSetting: Common.Settings.Setting<StoredRecording[]>;
+  #mutex = new Common.Mutex.Mutex();
+  #idGenerator: IdGenerator = new UUIDGenerator();
+
+  constructor() {
+    this.#recordingsSetting = Common.Settings.Settings.instance().createSetting(
+        'recorder-recordings-ng',
+        [],
+    );
+  }
+
+  clearForTest(): void {
+    this.#recordingsSetting.set([]);
+    this.#idGenerator = new UUIDGenerator();
+  }
+
+  setIdGeneratorForTest(idGenerator: IdGenerator): void {
+    this.#idGenerator = idGenerator;
+  }
+
+  async upsertRecording(
+      flow: UserFlow,
+      storageName?: string,
+      ): Promise<StoredRecording> {
+    const release = await this.#mutex.acquire();
+    try {
+      const recordings = await this.#recordingsSetting.forceGet();
+      flow.title = Platform.StringUtilities.trimEndWithMaxLength(flow.title, 300);
+
+      let recording = recordings.find(
+          recording => recording.storageName === storageName,
+      );
+      if (recording) {
+        recording.flow = flow;
+      } else {
+        recording = {
+          storageName: this.#idGenerator.next(),
+          flow,
+        };
+        recordings.push(recording);
+      }
+
+      this.#recordingsSetting.set(recordings);
+      return recording;
+    } finally {
+      release();
+    }
+  }
+
+  async deleteRecording(storageName: string): Promise<void> {
+    const release = await this.#mutex.acquire();
+    try {
+      const recordings = await this.#recordingsSetting.forceGet();
+      this.#recordingsSetting.set(
+          recordings.filter(recording => recording.storageName !== storageName),
+      );
+    } finally {
+      release();
+    }
+  }
+
+  getRecording(storageName: string): StoredRecording|undefined {
+    const recordings = this.#recordingsSetting.get();
+    return recordings.find(
+        recording => recording.storageName === storageName,
+    );
+  }
+
+  getRecordings(): StoredRecording[] {
+    return this.#recordingsSetting.get();
+  }
+
+  static instance(): RecordingStorage {
+    if (!instance) {
+      instance = new RecordingStorage();
+    }
+    return instance;
+  }
+}
+
+export interface StoredRecording {
+  storageName: string;
+  flow: UserFlow;
+}

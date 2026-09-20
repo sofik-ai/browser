@@ -1,0 +1,16 @@
+{
+  "extends": "../../config/typescript/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["esnext", "dom"],
+    "types": ["node", "mocha"],
+    "outDir": "ignored",
+    "rootDir": ".",
+    "checkJs": true,
+    "noEmit": true,
+    "noImplicitAny": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
+  }
+}

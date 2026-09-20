@@ -1,0 +1,1738 @@
+// Copyright 2010 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+/* eslint-disable @devtools/no-imperative-dom-api, @devtools/no-lit-render-outside-of-view */
+
+import * as Common from '../../core/common/common.js';
+import * as i18n from '../../core/i18n/i18n.js';
+import * as Platform from '../../core/platform/platform.js';
+import * as Annotations from '../../models/annotations/annotations.js';
+import * as Geometry from '../../models/geometry/geometry.js';
+import * as Buttons from '../../ui/components/buttons/buttons.js';
+import {type LitTemplate, render} from '../../ui/lit/lit.js';
+import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
+import {createIcon, Icon} from '../kit/kit.js';
+
+import * as ARIAUtils from './ARIAUtils.js';
+import {ContextMenu} from './ContextMenu.js';
+import tabbedPaneStyles from './tabbedPane.css.js';
+import type {Toolbar} from './Toolbar.js';
+import {Tooltip} from './Tooltip.js';
+import {installDragHandle} from './UIUtils.js';
+import {type AnyWidget, registerWidgetConfig, VBox, Widget, widgetConfig, WidgetElement} from './Widget.js';
+import {Events as ZoomManagerEvents, ZoomManager} from './ZoomManager.js';
+
+const UIStrings = {
+  /**
+   * @description The aria label for the button to open more tabs at the right tabbed pane in Elements tools
+   */
+  moreTabs: 'More tabs',
+  /**
+   * @description Text in Tabbed Pane
+   * @example {tab} PH1
+   */
+  closeS: 'Close {PH1}',
+  /**
+   * @description Text to close something
+   */
+  close: 'Close',
+  /**
+   * @description Text on a menu option to close other drawers when right click on a drawer title
+   */
+  closeOthers: 'Close others',
+  /**
+   * @description Text on a menu option to close the drawer to the right when right click on a drawer title
+   */
+  closeTabsToTheRight: 'Close tabs to the right',
+  /**
+   * @description Text on a menu option to close all the drawers except Console when right click on a drawer title
+   */
+  closeAll: 'Close all',
+  /**
+   * @description Indicates that a tab contains a preview feature (i.e., a beta / experimental feature).
+   */
+  previewFeature: 'Preview feature',
+  /**
+   * @description Indicates that a tab contains annotation(s).
+   */
+  panelContainsAnnotation: 'This panel has one or more annotations',
+  /**
+   * @description Text to move a tab forwar.
+   */
+  moveTabRight: 'Move right',
+  /**
+   * @description Text to move a tab backward.
+   */
+  moveTabLeft: 'Move left',
+} as const;
+
+const str_ = i18n.i18n.registerUIStrings('ui/legacy/TabbedPane.ts', UIStrings);
+const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
+
+export interface TabInfo {
+  id: string;
+  title: string;
+  view: AnyWidget;
+  tabTooltip?: string;
+  isCloseable?: boolean;
+  previewFeature?: boolean;
+  index?: number;
+  jslogContext?: string;
+  enabled?: boolean;
+  selected?: boolean;
+}
+
+export class TabbedPane extends Common.ObjectWrapper.eventMixin<EventTypes, typeof VBox>(VBox) {
+  readonly #headerElement: HTMLElement;
+  protected readonly headerContentsElement: HTMLElement;
+  tabSlider: HTMLDivElement;
+  readonly tabsElement: HTMLElement;
+  readonly #contentElement: HTMLElement;
+  #tabs: TabbedPaneTab[];
+  private readonly tabsHistory: TabbedPaneTab[];
+  tabsById: Map<string, TabbedPaneTab>;
+  private currentTabLocked: boolean;
+  private autoSelectFirstItemOnShow: boolean;
+  private triggerDropDownTimeout: number|null;
+  private dropDownButton: HTMLDivElement;
+  private currentDevicePixelRatio: number;
+  private shrinkableTabs?: boolean;
+  private verticalTabLayout?: boolean;
+  private closeableTabs?: boolean;
+  private delegate?: TabbedPaneTabDelegate;
+  private currentTab?: TabbedPaneTab;
+  private sliderEnabled?: boolean;
+  private placeholderElement?: Element;
+  private focusedPlaceholderElement?: Element;
+  private placeholderContainerElement?: HTMLElement;
+  private lastSelectedOverflowTab?: TabbedPaneTab;
+  private measuredDropDownButtonWidth?: number;
+  #leftToolbar?: Toolbar;
+  #rightToolbar?: Toolbar;
+  allowTabReorder?: boolean;
+  private automaticReorder?: boolean;
+
+  constructor(element?: HTMLElement) {
+    super(element, {useShadowDom: true});
+    this.registerRequiredCSS(tabbedPaneStyles);
+    this.element.classList.add('tabbed-pane');
+    this.contentElement.classList.add('tabbed-pane-shadow');
+    this.contentElement.tabIndex = -1;
+    this.setDefaultFocusedElement(this.contentElement);
+    this.#headerElement = this.contentElement.createChild('div', 'tabbed-pane-header');
+    const leftSlot = document.createElement('slot');
+    leftSlot.name = 'left';
+    leftSlot.classList.add('tabbed-pane-left-toolbar');
+    this.#headerElement.appendChild(leftSlot);
+    leftSlot.addEventListener('slotchange', () => {
+      this.#leftToolbar = leftSlot.assignedElements()[0] as Toolbar | undefined;
+      this.requestUpdate();
+    });
+
+    this.headerContentsElement = this.#headerElement.createChild('div', 'tabbed-pane-header-contents');
+
+    const rightSlot = document.createElement('slot');
+    rightSlot.name = 'right';
+    rightSlot.classList.add('tabbed-pane-right-toolbar');
+    this.#headerElement.appendChild(rightSlot);
+    rightSlot.addEventListener('slotchange', () => {
+      this.#rightToolbar = rightSlot.assignedElements()[0] as Toolbar | undefined;
+      this.requestUpdate();
+    });
+
+    this.tabSlider = document.createElement('div');
+    this.tabSlider.classList.add('tabbed-pane-tab-slider');
+    this.tabsElement = this.headerContentsElement.createChild('div', 'tabbed-pane-header-tabs');
+    this.tabsElement.setAttribute('role', 'tablist');
+    this.tabsElement.addEventListener('keydown', this.keyDown.bind(this), false);
+    this.#contentElement = this.contentElement.createChild('div', 'tabbed-pane-content');
+    this.#contentElement.createChild('slot');
+    this.#tabs = [];
+    this.tabsHistory = [];
+    this.tabsById = new Map();
+    this.currentTabLocked = false;
+    this.autoSelectFirstItemOnShow = true;
+
+    this.triggerDropDownTimeout = null;
+    this.dropDownButton = this.createDropDownButton();
+    this.currentDevicePixelRatio = window.devicePixelRatio;
+    ZoomManager.instance().addEventListener(ZoomManagerEvents.ZOOM_CHANGED, this.zoomChanged, this);
+    this.makeTabSlider();
+
+    if (Annotations.AnnotationRepository.annotationsEnabled()) {
+      Annotations.AnnotationRepository.instance().addEventListener(
+          Annotations.Events.ANNOTATION_ADDED, this.#onUpdateAnnotations, this);
+      Annotations.AnnotationRepository.instance().addEventListener(
+          Annotations.Events.ANNOTATION_DELETED, this.#onUpdateAnnotations, this);
+      Annotations.AnnotationRepository.instance().addEventListener(
+          Annotations.Events.ALL_ANNOTATIONS_DELETED, this.#onUpdateAnnotations, this);
+    }
+  }
+
+  setAccessibleName(name: string): void {
+    ARIAUtils.setLabel(this.tabsElement, name);
+  }
+
+  setCurrentTabLocked(locked: boolean): void {
+    this.currentTabLocked = locked;
+    this.#headerElement.classList.toggle('locked', this.currentTabLocked);
+  }
+
+  setAutoSelectFirstItemOnShow(autoSelect: boolean): void {
+    this.autoSelectFirstItemOnShow = autoSelect;
+  }
+
+  get visibleView(): AnyWidget|null {
+    return this.currentTab ? this.currentTab.view : null;
+  }
+
+  tabIds(): string[] {
+    return this.#tabs.map(tab => tab.id);
+  }
+
+  tabIndex(tabId: string): number {
+    return this.#tabs.findIndex(tab => tab.id === tabId);
+  }
+
+  tabViews(): AnyWidget[] {
+    return this.#tabs.map(tab => tab.view);
+  }
+
+  tabView(tabId: string): AnyWidget|null {
+    const tab = this.tabsById.get(tabId);
+    return tab ? tab.view : null;
+  }
+
+  get selectedTabId(): string|null {
+    return this.currentTab ? this.currentTab.id : null;
+  }
+
+  setShrinkableTabs(shrinkableTabs: boolean): void {
+    this.shrinkableTabs = shrinkableTabs;
+  }
+
+  makeVerticalTabLayout(): void {
+    this.verticalTabLayout = true;
+    this.setTabSlider(false);
+    this.contentElement.classList.add('vertical-tab-layout');
+    this.invalidateConstraints();
+  }
+
+  setCloseableTabs(closeableTabs: boolean): void {
+    this.closeableTabs = closeableTabs;
+  }
+
+  override focus(): void {
+    if (this.visibleView) {
+      this.visibleView.focus();
+    } else {
+      this.contentElement.focus();
+    }
+  }
+
+  focusSelectedTabHeader(): void {
+    const selectedTab = this.currentTab;
+    if (selectedTab) {
+      selectedTab.tabElement.focus();
+    }
+  }
+
+  headerElement(): Element {
+    return this.#headerElement;
+  }
+
+  tabbedPaneContentElement(): Element {
+    return this.#contentElement;
+  }
+
+  setTabDelegate(delegate: TabbedPaneTabDelegate): void {
+    const tabs = this.#tabs.slice();
+    for (let i = 0; i < tabs.length; ++i) {
+      tabs[i].setDelegate(delegate);
+    }
+    this.delegate = delegate;
+  }
+
+  appendTab(
+      id: string, tabTitle: string, view: AnyWidget, tabTooltip?: string, userGesture?: boolean, isCloseable?: boolean,
+      isPreviewFeature?: boolean, index?: number, jslogContext?: string): void {
+    const closeable = typeof isCloseable === 'boolean' ? isCloseable : Boolean(this.closeableTabs);
+    const tab =
+        new TabbedPaneTab(this, id, tabTitle, closeable, Boolean(isPreviewFeature), view, tabTooltip, jslogContext);
+    tab.setDelegate((this.delegate as TabbedPaneTabDelegate));
+    console.assert(!this.tabsById.has(id), `Tabbed pane already contains a tab with id '${id}'`);
+    this.tabsById.set(id, tab);
+    tab.tabElement.tabIndex = -1;
+    tab.tabElement.setAttribute(
+        'jslog', `${VisualLogging.panelTabHeader().track({click: true, drag: true}).context(tab.jslogContext)}`);
+    if (index !== undefined) {
+      this.#tabs.splice(index, 0, tab);
+    } else {
+      this.#tabs.push(tab);
+    }
+    this.tabsHistory.push(tab);
+    if (this.tabsHistory[0] === tab && this.isShowing()) {
+      this.selectTab(tab.id, userGesture);
+    }
+    this.requestUpdate();
+  }
+
+  closeTab(id: string, userGesture?: boolean): void {
+    this.closeTabs([id], userGesture);
+  }
+
+  closeTabs(ids: string[], userGesture?: boolean): void {
+    if (ids.length === 0) {
+      return;
+    }
+
+    const focused = this.hasFocus();
+    for (let i = 0; i < ids.length; ++i) {
+      this.#closeTab(ids[i], userGesture);
+    }
+    this.requestUpdate();
+    if (this.tabsHistory.length) {
+      this.selectTab(this.tabsHistory[0].id, false);
+    }
+    if (focused) {
+      this.focus();
+    }
+  }
+
+  #closeTab(id: string, userGesture?: boolean): true|undefined {
+    const tab = this.tabsById.get(id);
+    if (!tab) {
+      return;
+    }
+    if (userGesture && !tab.closeable) {
+      return;
+    }
+    if (this.currentTab?.id === id) {
+      this.hideCurrentTab();
+    }
+
+    this.tabsById.delete(id);
+
+    this.tabsHistory.splice(this.tabsHistory.indexOf(tab), 1);
+    this.#tabs.splice(this.#tabs.indexOf(tab), 1);
+    if (tab.shown) {
+      this.hideTabElement(tab);
+    }
+
+    const eventData: EventData = {tabId: id, view: tab.view, isUserGesture: userGesture};
+    this.dispatchEventToListeners(Events.TabClosed, eventData);
+    return true;
+  }
+
+  hasTab(tabId: string): boolean {
+    return this.tabsById.has(tabId);
+  }
+
+  otherTabs(id: string): string[] {
+    const result = [];
+    for (let i = 0; i < this.#tabs.length; ++i) {
+      if (this.#tabs[i].id !== id) {
+        result.push(this.#tabs[i].id);
+      }
+    }
+    return result;
+  }
+
+  tabsToTheRight(id: string): string[] {
+    let index = -1;
+    for (let i = 0; i < this.#tabs.length; ++i) {
+      if (this.tabs[i].id === id) {
+        index = i;
+        break;
+      }
+    }
+    if (index === -1) {
+      return [];
+    }
+    return this.#tabs.slice(index + 1).map(function(tab) {
+      return tab.id;
+    });
+  }
+
+  private viewHasFocus(): boolean {
+    if (this.visibleView?.hasFocus()) {
+      return true;
+    }
+    const root = this.contentElement.getComponentRoot();
+    return root instanceof Document && this.contentElement === root.activeElement;
+  }
+
+  selectTab(id: string, userGesture?: boolean, forceFocus?: boolean): boolean {
+    if (this.currentTabLocked) {
+      return false;
+    }
+    const focused = this.viewHasFocus();
+    const tab = this.tabsById.get(id);
+    if (!tab) {
+      return false;
+    }
+
+    this.lastSelectedOverflowTab = tab;
+
+    const eventData: EventData = {
+      prevTabId: this.currentTab ? this.currentTab.id : undefined,
+      tabId: id,
+      view: tab.view,
+      isUserGesture: userGesture,
+    };
+    this.dispatchEventToListeners(Events.TabInvoked, eventData);
+    if (this.currentTab?.id === id) {
+      return true;
+    }
+
+    this.suspendInvalidations();
+    this.hideCurrentTab();
+    this.showTab(tab);
+    this.resumeInvalidations();
+    this.currentTab = tab;
+
+    this.tabsHistory.splice(this.tabsHistory.indexOf(tab), 1);
+    this.tabsHistory.splice(0, 0, tab);
+
+    this.requestUpdate();
+    if (focused || forceFocus) {
+      this.focus();
+    }
+
+    this.dispatchEventToListeners(Events.TabSelected, eventData);
+    return true;
+  }
+
+  selectNextTab(): void {
+    const index = this.#tabs.indexOf((this.currentTab as TabbedPaneTab));
+    const nextIndex = Platform.NumberUtilities.mod(index + 1, this.#tabs.length);
+    this.selectTab(this.#tabs[nextIndex].id, true);
+  }
+
+  selectPrevTab(): void {
+    const index = this.#tabs.indexOf((this.currentTab as TabbedPaneTab));
+    const nextIndex = Platform.NumberUtilities.mod(index - 1, this.#tabs.length);
+    this.selectTab(this.#tabs[nextIndex].id, true);
+  }
+
+  getTabIndex(id: string): number {
+    const index = this.#tabs.indexOf((this.tabsById.get(id) as TabbedPaneTab));
+    return index;
+  }
+
+  moveTabBackward(id: string, index: number): void {
+    this.insertBefore((this.tabsById.get(id) as TabbedPaneTab), index - 1);
+    this.updateTabSlider();
+  }
+
+  moveTabForward(id: string, index: number): void {
+    this.insertBefore((this.tabsById.get(id) as TabbedPaneTab), index + 2);
+    this.updateTabSlider();
+  }
+
+  lastOpenedTabIds(tabsCount: number): string[] {
+    function tabToTabId(tab: TabbedPaneTab): string {
+      return tab.id;
+    }
+
+    return this.tabsHistory.slice(0, tabsCount).map(tabToTabId);
+  }
+
+  setTabIcon(id: string, icon: Icon|null): void {
+    const tab = this.tabsById.get(id);
+    if (!tab) {
+      return;
+    }
+    tab.setIcon(icon);
+    this.requestUpdate();
+  }
+
+  setTrailingTabIcon(id: string, icon: Icon|LitTemplate|null): void {
+    const tab = this.tabsById.get(id);
+    if (!tab) {
+      return;
+    }
+    tab.setSuffixElement(icon);
+  }
+
+  setSuffixElement(id: string, suffixElement: HTMLElement|LitTemplate|null): void {
+    const tab = this.tabsById.get(id);
+    if (!tab) {
+      return;
+    }
+    tab.setSuffixElement(suffixElement);
+    this.requestUpdate();
+  }
+
+  setBadge(id: string, content: string|null): void {
+    const badge = document.createElement('span');
+    badge.textContent = content;
+    badge.classList.add('badge');
+    this.setSuffixElement(id, content ? badge : null);
+  }
+
+  setTabEnabled(id: string, enabled: boolean): void {
+    const tab = this.tabsById.get(id);
+    if (tab) {
+      tab.tabElement.classList.toggle('disabled', !enabled);
+    }
+  }
+
+  tabIsDisabled(id: string): boolean {
+    return !this.tabIsEnabled(id);
+  }
+
+  tabIsEnabled(id: string): boolean {
+    const tab = this.tabsById.get(id);
+    const disabled = tab?.tabElement.classList.contains('disabled') ?? false;
+    return !disabled;
+  }
+
+  private zoomChanged(): void {
+    this.clearMeasuredWidths();
+    if (this.isShowing()) {
+      this.requestUpdate();
+    }
+  }
+
+  protected clearMeasuredWidths(): void {
+    for (let i = 0; i < this.#tabs.length; ++i) {
+      delete this.#tabs[i].measuredWidth;
+    }
+  }
+
+  changeTabTitle(id: string, tabTitle: string, tabTooltip?: string): void {
+    const tab = this.tabsById.get(id);
+    if (tab && tabTooltip !== undefined) {
+      tab.tooltip = tabTooltip;
+    }
+    if (tab && tab.title !== tabTitle) {
+      tab.title = tabTitle;
+      ARIAUtils.setLabel(tab.tabElement, tabTitle);
+      this.requestUpdate();
+    }
+  }
+
+  changeTabView(id: string, view: AnyWidget): void {
+    const tab = this.tabsById.get(id);
+    if (!tab || tab.view === view) {
+      return;
+    }
+
+    this.suspendInvalidations();
+    const isSelected = this.currentTab?.id === id;
+    const shouldFocus = tab.view.hasFocus();
+    if (isSelected) {
+      this.hideTab(tab);
+    }
+    tab.view = view;
+    if (isSelected) {
+      this.showTab(tab);
+    }
+    if (shouldFocus) {
+      tab.view.focus();
+    }
+    this.resumeInvalidations();
+  }
+
+  get tabs(): TabInfo[] {
+    return this.#tabs.map(tab => ({
+                            id: tab.id,
+                            title: tab.title,
+                            view: tab.view,
+                            tabTooltip: tab.tooltip,
+                            isCloseable: tab.closeable,
+                            previewFeature: tab.previewFeature,
+                            index: this.#tabs.indexOf(tab),
+                            jslogContext: tab.jslogContext,
+                            enabled: this.tabIsEnabled(tab.id),
+                            selected: this.currentTab?.id === tab.id,
+                          }));
+  }
+
+  set tabs(tabs: TabInfo[]) {
+    const newIds = new Set(tabs.map(tab => tab.id));
+    for (const id of this.tabsById.keys()) {
+      if (!newIds.has(id)) {
+        this.#closeTab(id);
+      }
+    }
+    let index = 0;
+    for (const tab of tabs) {
+      const existingTab = this.tabsById.get(tab.id);
+      if (existingTab) {
+        this.changeTabView(tab.id, tab.view);
+        this.changeTabTitle(tab.id, tab.title, tab.tabTooltip);
+        if (tab.jslogContext !== undefined) {
+          existingTab.jslogContext = tab.jslogContext;
+        }
+        if (tab.isCloseable !== undefined) {
+          existingTab.closeable = tab.isCloseable;
+        }
+        if (tab.previewFeature !== undefined) {
+          existingTab.previewFeature = tab.previewFeature;
+        }
+        const currentIndex = this.#tabs.indexOf(existingTab);
+        if (currentIndex !== index) {
+          this.insertBefore(existingTab, index);
+        }
+      } else {
+        this.appendTab(
+            tab.id, tab.title, tab.view, tab.tabTooltip, /* userGesture=*/ false, tab.isCloseable, tab.previewFeature,
+            index, tab.jslogContext);
+      }
+      if (tab.enabled !== undefined) {
+        this.setTabEnabled(tab.id, tab.enabled);
+      }
+      if (tab.selected) {
+        this.selectTab(tab.id);
+      }
+      ++index;
+    }
+  }
+
+  override onResize(): void {
+    if (this.currentDevicePixelRatio !== window.devicePixelRatio) {
+      // Force recalculation of all tab widths on a DPI change
+      this.clearMeasuredWidths();
+      this.currentDevicePixelRatio = window.devicePixelRatio;
+    }
+    this.requestUpdate();
+  }
+
+  headerResized(): void {
+    this.requestUpdate();
+  }
+
+  override wasShown(): void {
+    super.wasShown();
+    const effectiveTab = this.currentTab || this.tabsHistory[0];
+    if (effectiveTab && this.autoSelectFirstItemOnShow) {
+      this.selectTab(effectiveTab.id);
+    }
+    this.requestUpdate();
+    this.dispatchEventToListeners(Events.PaneVisibilityChanged, {isVisible: true});
+  }
+
+  override wasHidden(): void {
+    this.dispatchEventToListeners(Events.PaneVisibilityChanged, {isVisible: false});
+  }
+
+  makeTabSlider(): void {
+    if (this.verticalTabLayout) {
+      return;
+    }
+    this.setTabSlider(true);
+  }
+
+  private setTabSlider(enable: boolean): void {
+    this.sliderEnabled = enable;
+    this.tabSlider.classList.toggle('enabled', enable);
+  }
+
+  override calculateConstraints(): Geometry.Constraints {
+    let constraints = super.calculateConstraints();
+    const minContentConstraints = new Geometry.Constraints(new Geometry.Size(0, 0), new Geometry.Size(50, 50));
+    constraints = constraints.widthToMax(minContentConstraints).heightToMax(minContentConstraints);
+    if (this.verticalTabLayout) {
+      constraints = constraints.addWidth(new Geometry.Constraints(new Geometry.Size(120, 0)));
+    } else {
+      constraints = constraints.addHeight(new Geometry.Constraints(new Geometry.Size(0, 30)));
+    }
+    return constraints;
+  }
+
+  setPlaceholderElement(element: Element, focusedElement?: Element): void {
+    this.placeholderElement = element;
+    if (focusedElement) {
+      this.focusedPlaceholderElement = focusedElement;
+    }
+    if (this.placeholderContainerElement) {
+      this.placeholderContainerElement.removeChildren();
+      this.placeholderContainerElement.appendChild(element);
+    }
+  }
+
+  async waitForTabElementUpdate(): Promise<void> {
+    this.performUpdate();
+  }
+
+  updateTabAnnotationIcons(): void {
+    if (!Annotations.AnnotationRepository.annotationsEnabled()) {
+      return;
+    }
+
+    const annotations = Annotations.AnnotationRepository.instance();
+    if (!annotations) {
+      return;
+    }
+
+    for (const tab of this.tabs) {
+      let primaryType = -1;
+      let secondaryType = -1;
+      switch (tab.id) {
+        case 'elements':
+          primaryType = Annotations.AnnotationType.ELEMENT_NODE;
+          secondaryType = Annotations.AnnotationType.STYLE_RULE;
+          break;
+        case 'network':
+          primaryType = Annotations.AnnotationType.NETWORK_REQUEST;
+          secondaryType = Annotations.AnnotationType.NETWORK_REQUEST_SUBPANEL_HEADERS;
+          break;
+      }
+
+      const showTabAnnotationIcon = annotations.getAnnotationDataByType(primaryType).length > 0 ||
+          annotations.getAnnotationDataByType(secondaryType).length > 0;
+      this.setTabAnnotationIcon(tab.id, showTabAnnotationIcon);
+    }
+  }
+
+  override performUpdate(): void {
+    if (!this.isShowing()) {
+      return;
+    }
+
+    if (!this.#tabs.length) {
+      this.#contentElement.classList.add('has-no-tabs');
+      if (this.placeholderElement && !this.placeholderContainerElement) {
+        this.placeholderContainerElement = this.#contentElement.createChild('div', 'tabbed-pane-placeholder fill');
+        this.placeholderContainerElement.appendChild(this.placeholderElement);
+        if (this.focusedPlaceholderElement) {
+          this.setDefaultFocusedElement(this.focusedPlaceholderElement);
+        }
+      }
+    } else {
+      this.#contentElement.classList.remove('has-no-tabs');
+      if (this.placeholderContainerElement) {
+        this.placeholderContainerElement.remove();
+        this.setDefaultFocusedElement(this.contentElement);
+        delete this.placeholderContainerElement;
+      }
+    }
+
+    this.measureDropDownButton();
+    this.adjustToolbarWidth();
+    this.updateWidths();
+    this.updateTabsDropDown();
+    this.updateTabSlider();
+    this.updateTabAnnotationIcons();
+  }
+
+  private adjustToolbarWidth(): void {
+    if (!this.#rightToolbar || !this.measuredDropDownButtonWidth) {
+      return;
+    }
+    const leftToolbarWidth = this.#leftToolbar?.getBoundingClientRect().width ?? 0;
+    const rightToolbarWidth = this.#rightToolbar.getBoundingClientRect().width;
+    const totalWidth = this.#headerElement.getBoundingClientRect().width;
+    if (!this.#rightToolbar.hasCompactLayout() &&
+        totalWidth - rightToolbarWidth - leftToolbarWidth < this.measuredDropDownButtonWidth + 10) {
+      this.#rightToolbar.setCompactLayout(true);
+    } else if (
+        this.#rightToolbar.hasCompactLayout() &&
+        // Estimate the right toolbar size in non-compact mode as 2 times its compact size.
+        totalWidth - 2 * rightToolbarWidth - leftToolbarWidth > this.measuredDropDownButtonWidth + 10) {
+      this.#rightToolbar.setCompactLayout(false);
+    }
+  }
+
+  private showTabElement(index: number, tab: TabbedPaneTab): void {
+    if (index >= this.tabsElement.children.length) {
+      this.tabsElement.appendChild(tab.tabElement);
+    } else {
+      this.tabsElement.insertBefore(tab.tabElement, this.tabsElement.children[index]);
+    }
+    tab.shown = true;
+  }
+
+  private hideTabElement(tab: TabbedPaneTab): void {
+    this.tabsElement.removeChild(tab.tabElement);
+    tab.shown = false;
+  }
+
+  private createDropDownButton(): HTMLDivElement {
+    const dropDownContainer = document.createElement('div');
+    dropDownContainer.classList.add('tabbed-pane-header-tabs-drop-down-container');
+    dropDownContainer.setAttribute('jslog', `${VisualLogging.dropDown('more-tabs').track({click: true})}`);
+    const chevronIcon = createIcon('chevron-double-right', 'chevron-icon');
+    const moreTabsString = i18nString(UIStrings.moreTabs);
+    dropDownContainer.title = moreTabsString;
+    ARIAUtils.markAsMenuButton(dropDownContainer);
+    ARIAUtils.setLabel(dropDownContainer, moreTabsString);
+    ARIAUtils.setExpanded(dropDownContainer, false);
+    dropDownContainer.tabIndex = 0;
+    dropDownContainer.appendChild(chevronIcon);
+    dropDownContainer.addEventListener('click', this.dropDownClicked.bind(this));
+    dropDownContainer.addEventListener('keydown', this.dropDownKeydown.bind(this));
+    dropDownContainer.addEventListener('mousedown', event => {
+      if (event.button !== 0 || this.triggerDropDownTimeout) {
+        return;
+      }
+      this.triggerDropDownTimeout = window.setTimeout(this.dropDownClicked.bind(this, event), 200);
+    });
+    return dropDownContainer;
+  }
+
+  private dropDownClicked(event: MouseEvent): void {
+    if (event.button !== 0) {
+      return;
+    }
+    if (this.triggerDropDownTimeout) {
+      clearTimeout(this.triggerDropDownTimeout);
+      this.triggerDropDownTimeout = null;
+    }
+    const rect = this.dropDownButton.getBoundingClientRect();
+    const menu = new ContextMenu(event, {
+      x: rect.left,
+      y: rect.bottom,
+      onSoftMenuClosed: () => {
+        ARIAUtils.setExpanded(this.dropDownButton, false);
+      },
+    });
+    for (const tab of this.#tabs) {
+      if (tab.shown) {
+        continue;
+      }
+      if (this.numberOfTabsShown() === 0 && this.tabsHistory[0] === tab) {
+        menu.defaultSection().appendCheckboxItem(
+            tab.title, this.dropDownMenuItemSelected.bind(this, tab), {checked: true, jslogContext: tab.jslogContext});
+      } else {
+        menu.defaultSection().appendItem(
+            tab.title, this.dropDownMenuItemSelected.bind(this, tab), {jslogContext: tab.jslogContext});
+      }
+    }
+    void menu.show().then(() => ARIAUtils.setExpanded(this.dropDownButton, menu.isHostedMenuOpen()));
+  }
+
+  private dropDownKeydown(event: KeyboardEvent): void {
+    if (Platform.KeyboardUtilities.isEnterOrSpaceKey(event)) {
+      this.dropDownButton.click();
+      event.consume(true);
+    }
+  }
+
+  private dropDownMenuItemSelected(tab: TabbedPaneTab): void {
+    this.selectTab(tab.id, true, true);
+  }
+
+  private totalWidth(): number {
+    return this.headerContentsElement.getBoundingClientRect().width;
+  }
+
+  private numberOfTabsShown(): number {
+    let numTabsShown = 0;
+    for (const tab of this.#tabs) {
+      if (tab.shown) {
+        numTabsShown++;
+      }
+    }
+    return numTabsShown;
+  }
+
+  private updateTabsDropDown(): void {
+    const tabsToShowIndexes =
+        this.tabsToShowIndexes(this.#tabs, this.tabsHistory, this.totalWidth(), this.measuredDropDownButtonWidth || 0);
+    if (this.lastSelectedOverflowTab && this.numberOfTabsShown() !== tabsToShowIndexes.length) {
+      delete this.lastSelectedOverflowTab;
+      this.updateTabsDropDown();
+      return;
+    }
+
+    for (let i = 0; i < this.#tabs.length; ++i) {
+      if (this.#tabs[i].shown && tabsToShowIndexes.indexOf(i) === -1) {
+        this.hideTabElement(this.#tabs[i]);
+      }
+    }
+    for (let i = 0; i < tabsToShowIndexes.length; ++i) {
+      const tab = this.#tabs[tabsToShowIndexes[i]];
+      if (!tab.shown) {
+        this.showTabElement(i, tab);
+      }
+    }
+
+    this.maybeShowDropDown(tabsToShowIndexes.length !== this.#tabs.length);
+  }
+
+  private maybeShowDropDown(hasMoreTabs: boolean): void {
+    if (hasMoreTabs && !this.dropDownButton.parentElement) {
+      this.headerContentsElement.appendChild(this.dropDownButton);
+    } else if (!hasMoreTabs && this.dropDownButton.parentElement) {
+      this.headerContentsElement.removeChild(this.dropDownButton);
+    }
+  }
+
+  private measureDropDownButton(): void {
+    if (this.measuredDropDownButtonWidth) {
+      return;
+    }
+    this.dropDownButton.classList.add('measuring');
+    this.headerContentsElement.appendChild(this.dropDownButton);
+    this.measuredDropDownButtonWidth = this.dropDownButton.getBoundingClientRect().width;
+    this.headerContentsElement.removeChild(this.dropDownButton);
+    this.dropDownButton.classList.remove('measuring');
+  }
+
+  private updateWidths(): void {
+    const measuredWidths = this.measureWidths();
+    const maxWidth =
+        this.shrinkableTabs ? this.calculateMaxWidth(measuredWidths.slice(), this.totalWidth()) : Number.MAX_VALUE;
+
+    let i = 0;
+    for (const tab of this.#tabs) {
+      tab.setWidth(this.verticalTabLayout ? -1 : Math.min(maxWidth, measuredWidths[i++]));
+    }
+  }
+
+  private measureWidths(): number[] {
+    // Add all elements to measure into this.tabsElement
+    this.tabsElement.style.setProperty('width', '2000px');
+    const measuringTabElements = new Map<HTMLElement, TabbedPaneTab>();
+    for (const tab of this.#tabs) {
+      if (typeof tab.measuredWidth === 'number') {
+        continue;
+      }
+      const measuringTabElement = tab.createTabElement(/* measure */ true);
+      measuringTabElements.set(measuringTabElement, tab);
+      this.tabsElement.appendChild(measuringTabElement);
+    }
+
+    // Perform measurement
+    for (const [measuringTabElement, tab] of measuringTabElements) {
+      const width = measuringTabElement.getBoundingClientRect().width;
+      tab.measuredWidth = Math.ceil(width) || undefined;  // Don't cache 0
+    }
+
+    // Nuke elements from the UI
+    for (const measuringTabElement of measuringTabElements.keys()) {
+      measuringTabElement.remove();
+    }
+
+    // Combine the results.
+    const measuredWidths = [];
+    for (const tab of this.#tabs) {
+      measuredWidths.push(tab.measuredWidth || 0);
+    }
+    this.tabsElement.style.removeProperty('width');
+
+    return measuredWidths;
+  }
+
+  private calculateMaxWidth(measuredWidths: number[], totalWidth: number): number {
+    if (!measuredWidths.length) {
+      return 0;
+    }
+
+    measuredWidths.sort(function(x, y) {
+      return x - y;
+    });
+
+    let totalMeasuredWidth = 0;
+    for (let i = 0; i < measuredWidths.length; ++i) {
+      totalMeasuredWidth += measuredWidths[i];
+    }
+
+    if (totalWidth >= totalMeasuredWidth) {
+      return measuredWidths[measuredWidths.length - 1];
+    }
+
+    let totalExtraWidth = 0;
+    for (let i = measuredWidths.length - 1; i > 0; --i) {
+      const extraWidth = measuredWidths[i] - measuredWidths[i - 1];
+      totalExtraWidth += (measuredWidths.length - i) * extraWidth;
+
+      if (totalWidth + totalExtraWidth >= totalMeasuredWidth) {
+        return measuredWidths[i - 1] +
+            (totalWidth + totalExtraWidth - totalMeasuredWidth) / (measuredWidths.length - i);
+      }
+    }
+
+    return totalWidth / measuredWidths.length;
+  }
+
+  private tabsToShowIndexes(
+      tabsOrdered: TabbedPaneTab[], tabsHistory: TabbedPaneTab[], totalWidth: number,
+      measuredDropDownButtonWidth: number): number[] {
+    const tabsToShowIndexes = [];
+
+    let totalTabsWidth = 0;
+    const tabCount = tabsOrdered.length;
+    const tabsToLookAt = tabsOrdered.slice(0);
+    if (this.currentTab !== undefined) {
+      tabsToLookAt.unshift(tabsToLookAt.splice(tabsToLookAt.indexOf(this.currentTab), 1)[0]);
+    }
+    if (this.lastSelectedOverflowTab !== undefined) {
+      tabsToLookAt.unshift(tabsToLookAt.splice(tabsToLookAt.indexOf(this.lastSelectedOverflowTab), 1)[0]);
+    }
+    for (let i = 0; i < tabCount; ++i) {
+      const tab = this.automaticReorder ? tabsHistory[i] : tabsToLookAt[i];
+      totalTabsWidth += tab.width();
+      let minimalRequiredWidth = totalTabsWidth;
+      if (i !== tabCount - 1) {
+        minimalRequiredWidth += measuredDropDownButtonWidth;
+      }
+      if (!this.verticalTabLayout && minimalRequiredWidth > totalWidth) {
+        break;
+      }
+      tabsToShowIndexes.push(tabsOrdered.indexOf(tab));
+    }
+
+    tabsToShowIndexes.sort(function(x, y) {
+      return x - y;
+    });
+
+    return tabsToShowIndexes;
+  }
+
+  private hideCurrentTab(): void {
+    if (!this.currentTab) {
+      return;
+    }
+
+    this.hideTab(this.currentTab);
+    delete this.currentTab;
+  }
+
+  private showTab(tab: TabbedPaneTab): void {
+    tab.tabElement.tabIndex = 0;
+    tab.tabElement.classList.add('selected');
+    ARIAUtils.setSelected(tab.tabElement, true);
+    tab.view.show(this.element);
+    this.updateTabSlider();
+  }
+
+  updateTabSlider(): void {
+    if (!this.sliderEnabled) {
+      return;
+    }
+    if (!this.currentTab) {
+      this.tabSlider.style.width = '0';
+      return;
+    }
+    let left = 0;
+    for (let i = 0; i < this.#tabs.length && this.currentTab !== this.#tabs[i]; i++) {
+      if (this.#tabs[i].shown) {
+        left += this.#tabs[i].measuredWidth || 0;
+      }
+    }
+    const sliderWidth = this.currentTab.shown ? this.currentTab.measuredWidth : this.dropDownButton.offsetWidth;
+    const scaleFactor = window.devicePixelRatio >= 1.5 ? ' scaleY(0.75)' : '';
+    this.tabSlider.style.transform = 'translateX(' + left + 'px)' + scaleFactor;
+    this.tabSlider.style.width = sliderWidth + 'px';
+
+    if (this.tabSlider.parentElement !== this.headerContentsElement) {
+      this.headerContentsElement.appendChild(this.tabSlider);
+    }
+  }
+
+  private hideTab(tab: TabbedPaneTab): void {
+    tab.tabElement.removeAttribute('tabIndex');
+    tab.tabElement.classList.remove('selected');
+    tab.tabElement.tabIndex = -1;
+    tab.tabElement.setAttribute('aria-selected', 'false');
+    tab.view.detach();
+  }
+
+  override elementsToRestoreScrollPositionsFor(): Element[] {
+    return [this.#contentElement];
+  }
+
+  insertBefore(tab: TabbedPaneTab, index: number): void {
+    this.tabsElement.insertBefore(tab.tabElement, this.tabsElement.childNodes[index]);
+    const oldIndex = this.#tabs.indexOf(tab);
+    this.#tabs.splice(oldIndex, 1);
+    if (oldIndex < index) {
+      --index;
+    }
+    this.#tabs.splice(index, 0, tab);
+
+    const eventData: EventData = {tabId: tab.id, view: tab.view};
+    this.dispatchEventToListeners(Events.TabOrderChanged, eventData);
+  }
+
+  leftToolbar(): Toolbar {
+    if (!this.#leftToolbar) {
+      const leftSlot = this.#headerElement.querySelector('slot[name="left"]') as HTMLSlotElement | null;
+      this.#leftToolbar = leftSlot?.assignedElements()[0] as Toolbar | undefined;
+    }
+    if (!this.#leftToolbar) {
+      this.#leftToolbar = document.createElement('devtools-toolbar');
+      this.#leftToolbar.classList.add('tabbed-pane-left-toolbar');
+      this.#headerElement.insertBefore(this.#leftToolbar, this.#headerElement.firstChild);
+    }
+    return this.#leftToolbar;
+  }
+
+  rightToolbar(): Toolbar {
+    if (!this.#rightToolbar) {
+      const rightSlot = this.#headerElement.querySelector('slot[name="right"]') as HTMLSlotElement | null;
+      this.#rightToolbar = rightSlot?.assignedElements()[0] as Toolbar | undefined;
+    }
+    if (!this.#rightToolbar) {
+      this.#rightToolbar = document.createElement('devtools-toolbar');
+      this.#rightToolbar.classList.add('tabbed-pane-right-toolbar');
+      this.#headerElement.appendChild(this.#rightToolbar);
+    }
+    return this.#rightToolbar;
+  }
+
+  setAllowTabReorder(allow: boolean, automatic?: boolean): void {
+    this.allowTabReorder = allow;
+    this.automaticReorder = automatic;
+  }
+
+  setTabAnnotationIcon(id: string, iconVisible: boolean): void {
+    const tab = this.tabsById.get(id);
+    if (tab) {
+      tab.tabAnnotationIcon = iconVisible;
+    }
+  }
+
+  #onUpdateAnnotations(): void {
+    this.updateTabAnnotationIcons();
+  }
+
+  private keyDown(event: KeyboardEvent): void {
+    if (!this.currentTab) {
+      return;
+    }
+    let nextTabElement: (Element|null)|null = null;
+    switch (event.key) {
+      case 'ArrowUp':
+      case 'ArrowLeft':
+        nextTabElement = this.currentTab.tabElement.previousElementSibling;
+        if (!nextTabElement && !this.dropDownButton.parentElement) {
+          nextTabElement = this.currentTab.tabElement.parentElement ?
+              this.currentTab.tabElement.parentElement.lastElementChild :
+              null;
+        }
+        break;
+      case 'ArrowDown':
+      case 'ArrowRight':
+        nextTabElement = this.currentTab.tabElement.nextElementSibling;
+        if (!nextTabElement && !this.dropDownButton.parentElement) {
+          nextTabElement = this.currentTab.tabElement.parentElement ?
+              this.currentTab.tabElement.parentElement.firstElementChild :
+              null;
+        }
+        break;
+      case 'Enter':
+      case ' ':
+        this.currentTab.view.focus();
+        return;
+      default:
+        return;
+    }
+    if (!nextTabElement) {
+      this.dropDownButton.click();
+      return;
+    }
+    const tab = this.#tabs.find(tab => tab.tabElement === nextTabElement);
+    if (tab) {
+      this.selectTab(tab.id, true);
+    }
+    (nextTabElement as HTMLElement).focus();
+  }
+}
+export interface EventData {
+  prevTabId?: string;
+  tabId: string;
+  view?: AnyWidget;
+  isUserGesture?: boolean;
+}
+
+export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
+  TabInvoked = 'TabInvoked',
+  TabSelected = 'TabSelected',
+  TabClosed = 'TabClosed',
+  TabOrderChanged = 'TabOrderChanged',
+  PaneVisibilityChanged = 'PaneVisibilityChanged',
+  /* eslint-enable @typescript-eslint/naming-convention */
+}
+
+export interface EventTypes {
+  [Events.TabInvoked]: EventData;
+  [Events.TabSelected]: EventData;
+  [Events.TabClosed]: EventData;
+  [Events.TabOrderChanged]: EventData;
+  [Events.PaneVisibilityChanged]: {isVisible: boolean};
+}
+
+export class TabbedPaneTab {
+  closeable: boolean;
+  previewFeature = false;
+  #tabAnnotationIcon = false;
+  private readonly tabbedPane: TabbedPane;
+  #id: string;
+  #title: string;
+  #tooltip: string|undefined;
+  #view: AnyWidget;
+  shown: boolean;
+  measuredWidth!: number|undefined;
+  #tabElement!: HTMLElement|undefined;
+  private icon: Icon|null = null;
+  private suffixElement: HTMLElement|LitTemplate|null = null;
+
+  #width?: number;
+  private delegate?: TabbedPaneTabDelegate;
+  private titleElement?: HTMLElement;
+  private dragStartX?: number;
+  #jslogContext?: string;
+  constructor(
+      tabbedPane: TabbedPane, id: string, title: string, closeable: boolean, previewFeature: boolean, view: AnyWidget,
+      tooltip?: string, jslogContext?: string) {
+    this.closeable = closeable;
+    this.previewFeature = previewFeature;
+    this.tabbedPane = tabbedPane;
+    this.#id = id;
+    this.#title = title;
+    this.#tooltip = tooltip;
+    this.#view = view;
+    this.shown = false;
+    this.#jslogContext = jslogContext;
+  }
+
+  get id(): string {
+    return this.#id;
+  }
+
+  get title(): string {
+    return this.#title;
+  }
+
+  set title(title: string) {
+    if (title === this.#title) {
+      return;
+    }
+    this.#title = title;
+    if (this.titleElement) {
+      this.titleElement.textContent = title;
+      const closeIconContainer = this.#tabElement?.querySelector('.close-button');
+      closeIconContainer?.setAttribute('title', i18nString(UIStrings.closeS, {PH1: title}));
+      closeIconContainer?.setAttribute('aria-label', i18nString(UIStrings.closeS, {PH1: title}));
+    }
+    delete this.measuredWidth;
+  }
+
+  get jslogContext(): string {
+    return this.#jslogContext ?? (this.#id === 'console-view' ? 'console' : this.#id);
+  }
+
+  set jslogContext(jslogContext: string|undefined) {
+    this.#jslogContext = jslogContext;
+  }
+
+  get tabAnnotationIcon(): boolean {
+    return this.#tabAnnotationIcon;
+  }
+
+  set tabAnnotationIcon(iconVisible: boolean) {
+    if (this.#tabAnnotationIcon === iconVisible) {
+      return;
+    }
+    this.#tabAnnotationIcon = iconVisible;
+    if (!this.#tabElement) {
+      return;
+    }
+    const iconElement = this.#tabElement.querySelector('.spark');
+    if (iconVisible) {
+      if (!iconElement) {
+        const spark = this.createTabAnnotationIcon();
+        this.#tabElement.appendChild(spark);
+
+        const parentRect = this.#tabElement.parentElement?.getBoundingClientRect();
+        if (!parentRect) {
+          return;
+        }
+        const containerRect = this.tabElement.getBoundingClientRect();
+        const iconWidth = spark.getBoundingClientRect().width;
+        // Position the icon so that its right edge is at the container's right edge.
+        const x = containerRect.x - parentRect.x + containerRect.width - iconWidth;
+        (spark as HTMLElement).style.left = `${x}px`;
+      }
+    } else {
+      iconElement?.remove();
+    }
+    this.#tabElement.classList.toggle('ai', iconVisible);
+    delete this.measuredWidth;
+    this.tabbedPane.requestUpdate();
+  }
+
+  isCloseable(): boolean {
+    return this.closeable;
+  }
+
+  setIcon(icon: Icon|null): void {
+    this.icon = icon;
+    if (this.#tabElement && this.titleElement) {
+      this.createIconElement(this.#tabElement, this.titleElement, false);
+    }
+    delete this.measuredWidth;
+  }
+
+  setSuffixElement(suffixElement: HTMLElement|LitTemplate|null): void {
+    this.suffixElement = suffixElement;
+    if (this.#tabElement && this.titleElement) {
+      this.createSuffixElement(this.#tabElement, this.titleElement, false);
+    }
+    delete this.measuredWidth;
+  }
+
+  toggleClass(className: string, force?: boolean): boolean {
+    const element = this.tabElement;
+    const hasClass = element.classList.contains(className);
+    if (hasClass === force) {
+      return false;
+    }
+    element.classList.toggle(className, force);
+    delete this.measuredWidth;
+    return true;
+  }
+
+  get view(): AnyWidget {
+    return this.#view;
+  }
+
+  set view(view: AnyWidget) {
+    this.#view = view;
+  }
+
+  get tooltip(): string|undefined {
+    return this.#tooltip;
+  }
+
+  set tooltip(tooltip: string|undefined) {
+    this.#tooltip = tooltip;
+    if (this.titleElement) {
+      Tooltip.install(this.titleElement, tooltip || '');
+    }
+  }
+
+  get tabElement(): HTMLElement {
+    if (!this.#tabElement) {
+      this.#tabElement = this.createTabElement(false);
+    }
+
+    return this.#tabElement;
+  }
+
+  width(): number {
+    return this.#width || 0;
+  }
+
+  setWidth(width: number): void {
+    this.tabElement.style.width = width === -1 ? '' : (width + 'px');
+    this.#width = width;
+  }
+
+  setDelegate(delegate: TabbedPaneTabDelegate): void {
+    this.delegate = delegate;
+  }
+
+  private createIconElement(tabElement: Element, titleElement: Element, measuring: boolean): void {
+    const iconElement = tabIcons.get(tabElement);
+    if (iconElement) {
+      iconElement.remove();
+      tabIcons.delete(tabElement);
+    }
+    if (!this.icon) {
+      return;
+    }
+
+    const iconContainer = document.createElement('span');
+    iconContainer.classList.add('tabbed-pane-header-tab-icon');
+    const iconNode = measuring ? this.createMeasureClone(this.icon) : this.icon;
+    iconContainer.appendChild(iconNode);
+    titleElement.insertAdjacentElement('beforebegin', iconContainer);
+    tabIcons.set(tabElement, iconContainer);
+  }
+
+  private createSuffixElement(tabElement: Element, titleElement: Element, measuring: boolean): void {
+    const tabSuffixElement = tabSuffixElements.get(tabElement);
+    if (tabSuffixElement) {
+      tabSuffixElement.remove();
+      tabSuffixElements.delete(tabElement);
+    }
+    if (!this.suffixElement) {
+      return;
+    }
+
+    const suffixElementContainer = document.createElement('span');
+    suffixElementContainer.classList.add('tabbed-pane-header-tab-suffix-element');
+    if (this.suffixElement instanceof HTMLElement) {
+      const suffixElement = measuring ? this.suffixElement.cloneNode() : this.suffixElement;
+      suffixElementContainer.appendChild(suffixElement);
+    } else {
+      render(this.suffixElement, suffixElementContainer);
+    }
+    titleElement.insertAdjacentElement('afterend', suffixElementContainer);
+    tabSuffixElements.set(tabElement, suffixElementContainer);
+  }
+
+  private createMeasureClone(original: Icon): Element {
+    // Cloning doesn't work for the icon component because the shadow
+    // root isn't copied, but it is sufficient to create a div styled
+    // to be the same size.
+    const fakeClone = document.createElement('div');
+    fakeClone.style.width = original.style.width;
+    fakeClone.style.height = original.style.height;
+    return fakeClone;
+  }
+
+  createTabElement(measuring: boolean): HTMLElement {
+    const tabElement = document.createElement('div');
+    tabElement.classList.add('tabbed-pane-header-tab');
+    tabElement.id = 'tab-' + this.#id;
+    ARIAUtils.setSelected(tabElement, false);
+    ARIAUtils.setLabel(tabElement, this.title);
+
+    const titleElement = tabElement.createChild('span', 'tabbed-pane-header-tab-title');
+    ARIAUtils.markAsTab(titleElement);
+    titleElement.textContent = this.title;
+    Tooltip.install(titleElement, this.tooltip || '');
+    this.createIconElement(tabElement, titleElement, measuring);
+    this.createSuffixElement(tabElement, titleElement, measuring);
+    if (!measuring) {
+      this.titleElement = titleElement;
+    }
+
+    if (this.previewFeature) {
+      const previewIcon = this.createPreviewIcon();
+      tabElement.appendChild(previewIcon);
+      tabElement.classList.add('preview');
+    }
+
+    if (this.tabAnnotationIcon) {
+      const tabAnnotationIcon = this.createTabAnnotationIcon();
+      tabElement.appendChild(tabAnnotationIcon);
+      tabElement.classList.add('ai');
+    }
+
+    if (this.closeable) {
+      const closeIcon = this.createCloseIconButton();
+      tabElement.appendChild(closeIcon);
+      tabElement.classList.add('closeable');
+    }
+
+    if (measuring) {
+      tabElement.classList.add('measuring');
+    } else {
+      tabElement.addEventListener('click', this.tabClicked.bind(this), false);
+      tabElement.addEventListener('keydown', this.tabKeyDown.bind(this), false);
+      tabElement.addEventListener('auxclick', this.tabClicked.bind(this), false);
+      tabElement.addEventListener('mousedown', this.tabMouseDown.bind(this), false);
+      tabElement.addEventListener('mouseup', this.tabMouseUp.bind(this), false);
+
+      tabElement.addEventListener('contextmenu', this.tabContextMenu.bind(this), false);
+      if (this.tabbedPane.allowTabReorder) {
+        installDragHandle(
+            tabElement, this.startTabDragging.bind(this), this.tabDragging.bind(this), this.endTabDragging.bind(this),
+            null, null, 200);
+      }
+    }
+
+    return tabElement as HTMLElement;
+  }
+
+  private createTabAnnotationIcon(): Icon {
+    const tabAnnotationIcon = new Icon();
+    tabAnnotationIcon.name = 'spark';
+    tabAnnotationIcon.classList.add('small');
+    tabAnnotationIcon.classList.add('spark');
+    tabAnnotationIcon.setAttribute('title', i18nString(UIStrings.panelContainsAnnotation));
+    tabAnnotationIcon.setAttribute('aria-label', i18nString(UIStrings.panelContainsAnnotation));
+    return tabAnnotationIcon;
+  }
+
+  private createCloseIconButton(): Buttons.Button.Button {
+    const closeButton = new Buttons.Button.Button();
+    closeButton.data = {
+      variant: Buttons.Button.Variant.ICON,
+      size: Buttons.Button.Size.MICRO,
+      iconName: 'cross',
+      title: i18nString(UIStrings.closeS, {PH1: this.title}),
+    };
+    closeButton.classList.add('close-button', 'tabbed-pane-close-button');
+    closeButton.setAttribute('jslog', `${VisualLogging.close().track({click: true})}`);
+
+    closeButton.setAttribute('aria-label', i18nString(UIStrings.closeS, {PH1: this.title}));
+    return closeButton;
+  }
+
+  private createPreviewIcon(): HTMLDivElement {
+    const iconContainer = document.createElement('div');
+    iconContainer.classList.add('preview-icon');
+    const previewIcon = new Icon();
+    previewIcon.name = 'experiment';
+    previewIcon.classList.add('small');
+    iconContainer.appendChild(previewIcon);
+    iconContainer.setAttribute('title', i18nString(UIStrings.previewFeature));
+    iconContainer.setAttribute('aria-label', i18nString(UIStrings.previewFeature));
+    return iconContainer;
+  }
+
+  private isCloseIconClicked(element: HTMLElement): boolean {
+    return element?.classList.contains('tabbed-pane-close-button') ||
+        element?.parentElement?.classList.contains('tabbed-pane-close-button') || false;
+  }
+
+  private tabKeyDown(ev: Event): void {
+    const event = ev as KeyboardEvent;
+    switch (event.key) {
+      case 'Enter':
+      case ' ':
+        if (this.isCloseIconClicked(event.target as HTMLElement)) {
+          this.closeTabs([this.id]);
+          ev.consume(true);
+          return;
+        }
+    }
+  }
+
+  private tabClicked(event: MouseEvent): void {
+    const middleButton = event.button === 1;
+    const shouldClose = this.closeable && (middleButton || this.isCloseIconClicked(event.target as HTMLElement));
+    if (!shouldClose) {
+      this.tabbedPane.focus();
+      return;
+    }
+    this.closeTabs([this.id]);
+    event.consume(true);
+  }
+
+  private tabMouseDown(event: MouseEvent): void {
+    if (this.isCloseIconClicked(event.target as HTMLElement) || event.button !== 0) {
+      return;
+    }
+    this.tabbedPane.selectTab(this.id, true);
+  }
+
+  private tabMouseUp(event: MouseEvent): void {
+    // This is needed to prevent middle-click pasting on linux when tabs are clicked.
+    if (event.button === 1) {
+      event.consume(true);
+    }
+  }
+
+  private closeTabs(ids: string[]): void {
+    if (this.delegate) {
+      this.delegate.closeTabs(this.tabbedPane, ids);
+      return;
+    }
+    this.tabbedPane.closeTabs(ids, true);
+  }
+
+  private tabContextMenu(event: Event): void {
+    function close(this: TabbedPaneTab): void {
+      this.closeTabs([this.id]);
+    }
+
+    function closeOthers(this: TabbedPaneTab): void {
+      this.closeTabs(this.tabbedPane.otherTabs(this.id));
+    }
+
+    function closeAll(this: TabbedPaneTab): void {
+      this.closeTabs(this.tabbedPane.tabIds());
+    }
+
+    function closeToTheRight(this: TabbedPaneTab): void {
+      this.closeTabs(this.tabbedPane.tabsToTheRight(this.id));
+    }
+
+    function moveTabForward(this: TabbedPaneTab, tabIndex: number): void {
+      this.tabbedPane.moveTabForward(this.id, tabIndex);
+    }
+
+    function moveTabBackward(this: TabbedPaneTab, tabIndex: number): void {
+      this.tabbedPane.moveTabBackward(this.id, tabIndex);
+    }
+
+    const contextMenu = new ContextMenu(event);
+    if (this.closeable) {
+      contextMenu.defaultSection().appendItem(i18nString(UIStrings.close), close.bind(this), {jslogContext: 'close'});
+      contextMenu.defaultSection().appendItem(
+          i18nString(UIStrings.closeOthers), closeOthers.bind(this), {jslogContext: 'close-others'});
+      contextMenu.defaultSection().appendItem(
+          i18nString(UIStrings.closeTabsToTheRight), closeToTheRight.bind(this),
+          {jslogContext: 'close-tabs-to-the-right'});
+      contextMenu.defaultSection().appendItem(
+          i18nString(UIStrings.closeAll), closeAll.bind(this), {jslogContext: 'close-all'});
+    }
+    if (this.delegate) {
+      this.delegate.onContextMenu(this.id, contextMenu);
+    }
+    const tabIndex = this.tabbedPane.getTabIndex(this.id);
+    if (tabIndex > 0) {
+      contextMenu.defaultSection().appendItem(
+          i18nString(UIStrings.moveTabLeft), moveTabBackward.bind(this, tabIndex), {jslogContext: 'move-tab-backward'});
+    }
+    if (tabIndex < this.tabbedPane.tabsElement.childNodes.length - 1) {
+      contextMenu.defaultSection().appendItem(
+          i18nString(UIStrings.moveTabRight), moveTabForward.bind(this, tabIndex), {jslogContext: 'move-tab-forward'});
+    }
+    void contextMenu.show();
+  }
+
+  private startTabDragging(event: MouseEvent): boolean {
+    if (this.isCloseIconClicked(event.target as HTMLElement)) {
+      return false;
+    }
+    this.dragStartX = event.pageX;
+    if (this.#tabElement) {
+      this.#tabElement.classList.add('dragging');
+    }
+    this.tabbedPane.tabSlider.remove();
+    return true;
+  }
+
+  private tabDragging(event: MouseEvent): void {
+    const tabElements = this.tabbedPane.tabsElement.childNodes;
+    for (let i = 0; i < tabElements.length; ++i) {
+      let tabElement: HTMLElement = (tabElements[i] as HTMLElement);
+      if (!this.#tabElement || tabElement === this.#tabElement) {
+        continue;
+      }
+
+      const intersects = tabElement.offsetLeft + tabElement.clientWidth > this.#tabElement.offsetLeft &&
+          this.#tabElement.offsetLeft + this.#tabElement.clientWidth > tabElement.offsetLeft;
+      if (!intersects) {
+        continue;
+      }
+
+      const dragStartX = (this.dragStartX as number);
+      if (Math.abs(event.pageX - dragStartX) < tabElement.clientWidth / 2 + 5) {
+        break;
+      }
+
+      if (event.pageX - dragStartX > 0) {
+        tabElement = (tabElement.nextSibling as HTMLElement);
+        ++i;
+      }
+
+      const oldOffsetLeft = this.#tabElement.offsetLeft;
+      this.tabbedPane.insertBefore(this, i);
+      this.dragStartX = dragStartX + this.#tabElement.offsetLeft - oldOffsetLeft;
+      break;
+    }
+
+    const dragStartX = (this.dragStartX as number);
+    const tabElement = (this.#tabElement as HTMLElement);
+    if (!tabElement.previousSibling && event.pageX - dragStartX < 0) {
+      tabElement.style.setProperty('left', '0px');
+      return;
+    }
+    if (!tabElement.nextSibling && event.pageX - dragStartX > 0) {
+      tabElement.style.setProperty('left', '0px');
+      return;
+    }
+
+    tabElement.style.setProperty('left', (event.pageX - dragStartX) + 'px');
+  }
+
+  private endTabDragging(_event: Event): void {
+    const tabElement = (this.#tabElement as HTMLElement);
+    tabElement.classList.remove('dragging');
+    tabElement.style.removeProperty('left');
+    delete this.dragStartX;
+    this.tabbedPane.updateTabSlider();
+  }
+}
+
+const tabIcons = new WeakMap<Element, Element>();
+const tabSuffixElements = new WeakMap<Element, Element>();
+
+export interface TabbedPaneTabDelegate {
+  closeTabs(tabbedPane: TabbedPane, ids: string[]): void;
+  onContextMenu(tabId: string, contextMenu: ContextMenu): void;
+}
+
+export class TabbedPaneElement extends WidgetElement<TabbedPane> {
+  readonly #tabObserver = new MutationObserver(() => this.#updateTabs());
+
+  constructor() {
+    super();
+
+    registerWidgetConfig(this, widgetConfig(element => {
+                           const widget = new TabbedPane(element as TabbedPaneElement);
+                           const slot = widget.contentElement.querySelector('slot:not([name])');
+                           if (slot) {
+                             slot.addEventListener('slotchange', () => this.#syncTabs());
+                           }
+                           widget.addEventListener(Events.TabSelected, () => {
+                             const slot =
+                                 widget.contentElement.querySelector('slot:not([name])') as HTMLSlotElement | null;
+                             const nodes = slot ? slot.assignedElements() : [];
+                             for (const child of nodes) {
+                               if (child.id === widget.selectedTabId) {
+                                 child.setAttribute('selected', '');
+                               } else {
+                                 child.removeAttribute('selected');
+                               }
+                             }
+                             this.dispatchEvent(new CustomEvent('select', {detail: {tabId: widget.selectedTabId}}));
+                           });
+                           this.#syncTabs(widget);
+                           return widget;
+                         }));
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.#tabObserver.disconnect();
+  }
+
+  #syncTabs(widget = this.getWidget()): void {
+    if (!widget) {
+      return;
+    }
+    this.#updateObserver(widget);
+    this.#updateTabs(widget);
+  }
+
+  #updateObserver(widget: TabbedPane): void {
+    this.#tabObserver.disconnect();
+    const slot = widget.contentElement.querySelector('slot:not([name])') as HTMLSlotElement | null;
+    const nodes = slot ? slot.assignedElements() : [];
+    for (const child of nodes) {
+      this.#tabObserver.observe(
+          child, {attributes: true, attributeFilter: ['title', 'jslogcontext', 'selected', 'disabled']});
+    }
+  }
+
+  #updateTabs(widget = this.getWidget()): void {
+    if (!widget) {
+      return;
+    }
+    const tabs: TabInfo[] = [];
+    const slot = widget.contentElement.querySelector('slot:not([name])') as HTMLSlotElement | null;
+    const nodes = slot ? slot.assignedElements() : [];
+    for (const child of nodes) {
+      const id = child.id;
+      const title = child.getAttribute('title') || '';
+      const jslogContext = child.getAttribute('jslogcontext') || undefined;
+      const selected = child.hasAttribute('selected');
+      const enabled = !child.hasAttribute('disabled');
+      const view = Widget.getOrCreateWidget(child as HTMLElement);
+      view.setHideOnDetach();
+      if (widget.selectedTabId !== id) {
+        view.hideWidget();
+        child.classList.add('hidden');
+      } else {
+        view.showWidget();
+      }
+      tabs.push({
+        id,
+        title,
+        view,
+        jslogContext,
+        selected,
+        enabled,
+      });
+    }
+
+    widget.tabs = tabs;
+  }
+}
+
+customElements.define('devtools-tabbed-pane', TabbedPaneElement);

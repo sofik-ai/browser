@@ -1,0 +1,47 @@
+# Copyright 2021 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("../../../scripts/build/typescript/typescript.gni")
+import("./node.gni")
+import("./vars.gni")
+
+template("bundle") {
+  assert(defined(invoker.entrypoint),
+         "You must define the 'entrypoint' for a bundle target")
+
+  node_action(target_name) {
+    script = "scripts/build/esbuild.js"
+    forward_variables_from(invoker,
+                           [
+                             "visibility",
+                             "deps",
+                             "public_deps",
+                           ])
+
+    inputs = [
+      invoker.entrypoint,
+      devtools_location_prepend + "scripts/build/devtools_plugin.js",
+      devtools_location_prepend + "scripts/devtools_paths.js",
+    ]
+
+    _esbuild = devtools_location_prepend + "third_party/esbuild/esbuild"
+    if (host_os == "win") {
+      inputs += [ _esbuild + ".exe" ]
+    } else {
+      inputs += [ _esbuild ]
+    }
+
+    args = [
+      rebase_path(invoker.entrypoint, root_build_dir),
+      rebase_path(invoker.output_file_location, root_build_dir),
+      "--configSourcemaps",
+    ]
+
+    if (!is_debug) {
+      args += [ "--minify" ]
+    }
+
+    outputs = [ invoker.output_file_location ]
+  }
+}

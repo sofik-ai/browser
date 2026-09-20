@@ -1,0 +1,16 @@
+{
+  "extends": "../../config/typescript/tsconfig.base.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "allowUnreachableCode": false,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "allowUmdGlobalAccess": true,
+    "paths": {
+      "lit-html": ["./third_party/lit-html"],
+      "lit-html/*": ["./third_party/lit-html/*"]
+    },
+    "types": ["chai", "emscripten", "mocha", "sinon"]
+  },
+  "include": ["src/*.ts", "tests/*.ts"]
+}

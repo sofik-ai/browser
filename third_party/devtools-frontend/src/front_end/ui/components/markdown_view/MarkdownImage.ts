@@ -1,0 +1,80 @@
+// Copyright 2020 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+/* eslint-disable @devtools/no-lit-render-outside-of-view, @devtools/enforce-custom-element-definitions-location */
+
+import '../../kit/kit.js';
+
+import type {IconData} from '../../kit/kit.js';
+import * as Lit from '../../lit/lit.js';
+
+import markdownImageStyles from './markdownImage.css.js';
+import {getMarkdownImage, type ImageData} from './MarkdownImagesMap.js';
+
+const {html, Directives: {ifDefined}} = Lit;
+
+export interface MarkdownImageData {
+  key: string;
+  title: string;
+}
+
+/**
+ * Component to render images from parsed markdown.
+ * Parsed images from markdown are not directly rendered, instead they have to be added to the MarkdownImagesMap.ts.
+ * This makes sure that all icons/images are accounted for in markdown.
+ */
+export class MarkdownImage extends HTMLElement {
+  readonly #shadow = this.attachShadow({mode: 'open'});
+  #imageData?: ImageData;
+  #imageTitle?: string;
+
+  set data(data: MarkdownImageData) {
+    const {key, title} = data;
+    const markdownImage = getMarkdownImage(key);
+    this.#imageData = markdownImage;
+    this.#imageTitle = title;
+    this.#render();
+  }
+
+  #getIconComponent(): Lit.LitTemplate {
+    if (!this.#imageData) {
+      return Lit.nothing;
+    }
+    const {src, color, width = '100%', height = '100%'} = this.#imageData;
+    return html`
+      <devtools-icon .data=${{iconPath: src, color, width, height} as IconData}></devtools-icon>
+    `;
+  }
+
+  #getImageComponent(): Lit.LitTemplate {
+    if (!this.#imageData) {
+      return Lit.nothing;
+    }
+    const {src, width = '100%', height = '100%'} = this.#imageData;
+    return html`
+      <img class="markdown-image" src=${src} alt=${ifDefined(this.#imageTitle)} width=${width} height=${height} />
+    `;
+  }
+
+  #render(): void {
+    if (!this.#imageData) {
+      return;
+    }
+    const {isIcon} = this.#imageData;
+    const imageComponent = isIcon ? this.#getIconComponent() : this.#getImageComponent();
+    Lit.render(
+        html`
+      <style>${markdownImageStyles}</style>
+      ${imageComponent}
+    `,
+        this.#shadow, {host: this});
+  }
+}
+
+customElements.define('devtools-markdown-image', MarkdownImage);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'devtools-markdown-image': MarkdownImage;
+  }
+}

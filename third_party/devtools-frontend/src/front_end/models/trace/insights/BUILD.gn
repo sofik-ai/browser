@@ -1,0 +1,96 @@
+# Copyright 2024 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("../../../../scripts/build/ninja/devtools_entrypoint.gni")
+import("../../../../scripts/build/ninja/devtools_module.gni")
+import("../../visibility.gni")
+
+devtools_module("insights") {
+  sources = [
+    "CLSCulprits.ts",
+    "Cache.ts",
+    "CharacterSet.ts",
+    "Common.ts",
+    "DOMSize.ts",
+    "DocumentLatency.ts",
+    "DuplicatedJavaScript.ts",
+    "FontDisplay.ts",
+    "ForcedReflow.ts",
+    "INPBreakdown.ts",
+    "ImageDelivery.ts",
+    "LCPBreakdown.ts",
+    "LCPDiscovery.ts",
+    "LegacyJavaScript.ts",
+    "Models.ts",
+    "ModernHTTP.ts",
+    "NetworkDependencyTree.ts",
+    "RenderBlocking.ts",
+    "SlowCSSSelector.ts",
+    "Statistics.ts",
+    "ThirdParties.ts",
+    "Viewport.ts",
+    "types.ts",
+  ]
+
+  deps = [
+    "../../../core/common:bundle",
+    "../../../core/i18n:bundle",
+    "../../../core/platform:bundle",
+    "../../../generated:protocol",
+    "../../../third_party/legacy-javascript:bundle",
+    "../../../third_party/third-party-web:bundle",
+    "../../crux-manager:bundle",
+    "../extras:bundle",
+    "../handlers:bundle",
+    "../helpers:bundle",
+    "../lantern:bundle",
+    "../types:bundle",
+  ]
+}
+
+devtools_entrypoint("bundle") {
+  entrypoint = "insights.ts"
+  deps = [ ":insights" ]
+  visibility = [
+    ":*",
+    "../*",
+    "../../../panels/ai_assistance/*",
+    "../../ai_assistance/*",
+  ]
+
+  visibility += devtools_models_visibility
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "CLSCulprits.test.ts",
+    "Cache.test.ts",
+    "CharacterSet.test.ts",
+    "Common.test.ts",
+    "DOMSize.test.ts",
+    "DocumentLatency.test.ts",
+    "DuplicatedJavaScript.test.ts",
+    "FontDisplay.test.ts",
+    "ForcedReflow.test.ts",
+    "INPBreakdown.test.ts",
+    "ImageDelivery.test.ts",
+    "LCPBreakdown.test.ts",
+    "LCPDiscovery.test.ts",
+    "LegacyJavaScript.test.ts",
+    "ModernHTTP.test.ts",
+    "NetworkDependencyTree.test.ts",
+    "RenderBlocking.test.ts",
+    "SlowCSSSelector.test.ts",
+    "Statistics.test.ts",
+    "ThirdParties.test.ts",
+    "Viewport.test.ts",
+  ]
+
+  deps = [
+    "../../../models/trace:bundle",
+    "../../../testing",
+  ]
+}

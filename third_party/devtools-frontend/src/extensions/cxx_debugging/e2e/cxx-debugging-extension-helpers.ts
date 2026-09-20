@@ -1,0 +1,61 @@
+// Copyright 2023 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import {getTestServerPort} from 'test/conductor/server_port.js';
+import {openSourcesPanel} from 'test/e2e/helpers/sources-helpers.js';
+import {getBrowserAndPagesWrappers} from 'test/shared/non_hosted_wrappers';
+
+export interface Action {
+  action: string;
+  file?: string;
+  breakpoint?: string;
+}
+
+export interface Variable {
+  name: string;
+  type?: string;
+  value?: string;
+}
+
+export interface Evaluation {
+  expression: string;
+  value: string;
+}
+
+export interface Step {
+  reason: string;
+  file: string;
+  line: number;
+  actions?: Action[];
+  variables?: Variable[];
+  evaluations?: Evaluation[];
+  thread?: string;
+}
+
+export interface TestSpec {
+  name: string;
+  test: string;
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  extension_parameters?: string;
+  script?: Step[];
+  file?: string;
+}
+
+export async function openTestSuiteResourceInSourcesPanel(testInput: string) {
+  const {inspectedPage, devToolsPage} = getBrowserAndPagesWrappers();
+  await inspectedPage.goTo(`${getTestsuiteResourcesPath()}/extension_test_suite/${testInput}`);
+
+  await openSourcesPanel(devToolsPage);
+}
+
+export function getTestsuiteResourcesPath() {
+  return `https://localhost:${getTestServerPort()}`;
+}
+
+export function loadTests() {
+  const tests = JSON.parse(fs.readFileSync(path.join(__dirname, 'tests.json')).toString());
+  return tests as TestSpec[];
+}

@@ -1,0 +1,245 @@
+// Copyright 2017 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import * as Common from '../common/common.js';
+import * as Platform from '../platform/platform.js';
+
+import type {FrameAssociated} from './FrameAssociated.js';
+import {PageResourceLoader, type PageResourceLoadInitiator, type ResourceLoader} from './PageResourceLoader.js';
+import {type DebugId, parseSourceMap, SourceMap, type SourceMapV3} from './SourceMap.js';
+import {SourceMapCache} from './SourceMapCache.js';
+import {type Target, Type} from './Target.js';
+
+export type SourceMapFactory<T> =
+    (compiledURL: Platform.DevToolsPath.UrlString, sourceMappingURL: Platform.DevToolsPath.UrlString,
+     payload: SourceMapV3, client: T) => SourceMap;
+
+export class SourceMapManager<T extends FrameAssociated> extends Common.ObjectWrapper.ObjectWrapper<EventTypes<T>> {
+  readonly #target: Target;
+  readonly #factory: SourceMapFactory<T>;
+  #isEnabled = true;
+  readonly #clientData = new Map<T, ClientData>();
+  readonly #sourceMaps = new Map<SourceMap, T>();
+  #attachingClient: T|null = null;
+
+  constructor(target: Target, factory?: SourceMapFactory<T>) {
+    super();
+
+    this.#target = target;
+    this.#factory =
+        factory ?? ((compiledURL, sourceMappingURL, payload) => new SourceMap(compiledURL, sourceMappingURL, payload));
+  }
+
+  setEnabled(isEnabled: boolean): void {
+    if (isEnabled === this.#isEnabled) {
+      return;
+    }
+
+    // We need this copy, because `this.#clientData` is getting modified
+    // in the loop body and trying to iterate over it at the same time
+    // leads to an infinite loop.
+    const clientData = [...this.#clientData.entries()];
+    for (const [client] of clientData) {
+      this.detachSourceMap(client);
+    }
+    this.#isEnabled = isEnabled;
+    for (const [client, {relativeSourceURL, relativeSourceMapURL}] of clientData) {
+      this.attachSourceMap(client, relativeSourceURL, relativeSourceMapURL);
+    }
+  }
+
+  private static getBaseUrl(target: Target|null): Platform.DevToolsPath.UrlString {
+    while (target && target.type() !== Type.FRAME) {
+      target = target.parentTarget();
+    }
+    return target?.inspectedURL() ?? Platform.DevToolsPath.EmptyUrlString;
+  }
+
+  static resolveRelativeSourceURL(target: Target|null, url: Platform.DevToolsPath.UrlString):
+      Platform.DevToolsPath.UrlString {
+    url = Common.ParsedURL.ParsedURL.completeURL(SourceMapManager.getBaseUrl(target), url) ?? url;
+    return url;
+  }
+
+  sourceMapForClient(client: T): SourceMap|undefined {
+    return this.#clientData.get(client)?.sourceMap;
+  }
+
+  // This method actively awaits the source map, if still loading.
+  sourceMapForClientPromise(client: T): Promise<SourceMap|undefined> {
+    const clientData = this.#clientData.get(client);
+    if (!clientData) {
+      return Promise.resolve(undefined);
+    }
+
+    return clientData.sourceMapPromise;
+  }
+
+  clientForSourceMap(sourceMap: SourceMap): T|undefined {
+    return this.#sourceMaps.get(sourceMap);
+  }
+
+  // TODO(bmeurer): We are lying about the type of |relativeSourceURL| here.
+  attachSourceMap(
+      client: T, relativeSourceURL: Platform.DevToolsPath.UrlString, relativeSourceMapURL: string|undefined): void {
+    if (this.#clientData.has(client)) {
+      throw new Error('SourceMap is already attached or being attached to client');
+    }
+    if (!relativeSourceMapURL) {
+      return;
+    }
+
+    let clientData: ClientData|null = {
+      relativeSourceURL,
+      relativeSourceMapURL,
+      sourceMapPromise: Promise.resolve(undefined),
+    };
+    if (this.#isEnabled) {
+      // The `// #sourceURL=foo` can be a random string, but is generally an absolute path.
+      // Complete it to inspected page url for relative links.
+      const sourceURL = SourceMapManager.resolveRelativeSourceURL(this.#target, relativeSourceURL);
+      const sourceMapURL = Common.ParsedURL.ParsedURL.completeURL(sourceURL, relativeSourceMapURL);
+      if (sourceMapURL) {
+        if (this.#attachingClient) {
+          // This should not happen
+          console.error('Attaching source map may cancel previously attaching source map');
+        }
+        this.#attachingClient = client;
+        this.dispatchEventToListeners(Events.SourceMapWillAttach, {client});
+
+        if (this.#attachingClient === client) {
+          this.#attachingClient = null;
+          const initiator = client.createPageResourceLoadInitiator();
+          // TODO(crbug.com/458180550): Pass PageResourceLoader via constructor.
+          //     The reason we grab it here lazily from the context is that otherwise every
+          //     unit test using `createTarget` would need to set up a `PageResourceLoader`, as
+          //     CSSModel and DebuggerModel are autostarted by default, and they create a
+          //     SourceMapManager in their respective constructors.
+          const resourceLoader = this.#target.targetManager().context.get(PageResourceLoader);
+          clientData.sourceMapPromise =
+              loadSourceMap(resourceLoader, sourceMapURL, client.debugId(), initiator)
+                  .then(
+                      payload => {
+                        const sourceMap = this.#factory(sourceURL, sourceMapURL, payload, client);
+                        if (this.#clientData.get(client) === clientData) {
+                          clientData.sourceMap = sourceMap;
+                          this.#sourceMaps.set(sourceMap, client);
+                          this.dispatchEventToListeners(Events.SourceMapAttached, {client, sourceMap});
+                        }
+                        return sourceMap;
+                      },
+                      () => {
+                        if (this.#clientData.get(client) === clientData) {
+                          this.dispatchEventToListeners(Events.SourceMapFailedToAttach, {client});
+                        }
+                        return undefined;
+                      });
+        } else {
+          // Assume cancelAttachSourceMap was called.
+          if (this.#attachingClient) {
+            // This should not happen
+            console.error('Cancelling source map attach because another source map is attaching');
+          }
+          clientData = null;
+          this.dispatchEventToListeners(Events.SourceMapFailedToAttach, {client});
+        }
+      }
+    }
+    if (clientData) {
+      this.#clientData.set(client, clientData);
+    }
+  }
+
+  cancelAttachSourceMap(client: T): void {
+    if (client === this.#attachingClient) {
+      this.#attachingClient = null;
+      // This should not happen.
+    } else if (this.#attachingClient) {
+      console.error('cancel attach source map requested but a different source map was being attached');
+    } else {
+      console.error('cancel attach source map requested but no source map was being attached');
+    }
+  }
+
+  detachSourceMap(client: T): void {
+    const clientData = this.#clientData.get(client);
+    if (!clientData) {
+      return;
+    }
+    this.#clientData.delete(client);
+    if (!this.#isEnabled) {
+      return;
+    }
+    const {sourceMap} = clientData;
+    if (sourceMap) {
+      this.#sourceMaps.delete(sourceMap);
+      this.dispatchEventToListeners(Events.SourceMapDetached, {client, sourceMap});
+    } else {
+      this.dispatchEventToListeners(Events.SourceMapFailedToAttach, {client});
+    }
+  }
+
+  waitForSourceMapsProcessedForTest(): Promise<unknown> {
+    return Promise.all(this.#sourceMaps.keys().map(sourceMap => sourceMap.waitForScopeInfo()));
+  }
+}
+
+async function loadSourceMap(
+    resourceLoader: ResourceLoader, url: Platform.DevToolsPath.UrlString, debugId: DebugId|null,
+    initiator: PageResourceLoadInitiator): Promise<SourceMapV3> {
+  try {
+    if (debugId) {
+      const cachedSourceMap = await SourceMapCache.instance().get(debugId);
+      if (cachedSourceMap) {
+        return cachedSourceMap;
+      }
+    }
+
+    const {content} = await resourceLoader.loadResource(url, initiator);
+    const sourceMap = parseSourceMap(content);
+    if ('debugId' in sourceMap && sourceMap.debugId) {
+      // In case something goes wrong with updating the cache, we still want to use the source map.
+      await SourceMapCache.instance().set(sourceMap.debugId as DebugId, sourceMap).catch();
+    }
+    return sourceMap;
+  } catch (cause) {
+    throw new Error(`Could not load content for ${url}: ${cause.message}`, {cause});
+  }
+}
+
+export async function tryLoadSourceMap(
+    resourceLoader: ResourceLoader, url: Platform.DevToolsPath.UrlString,
+    initiator: PageResourceLoadInitiator): Promise<SourceMapV3|null> {
+  try {
+    return await loadSourceMap(resourceLoader, url, null, initiator);
+  } catch (cause) {
+    console.error(cause);
+    return null;
+  }
+}
+
+interface ClientData {
+  relativeSourceURL: Platform.DevToolsPath.UrlString;
+  // Stores the raw sourceMappingURL as provided by V8. These are not guaranteed to
+  // be valid URLs and will be checked and resolved once `attachSourceMap` is called.
+  relativeSourceMapURL: string;
+  sourceMap?: SourceMap;
+  sourceMapPromise: Promise<SourceMap|undefined>;
+}
+
+export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
+  SourceMapWillAttach = 'SourceMapWillAttach',
+  SourceMapFailedToAttach = 'SourceMapFailedToAttach',
+  SourceMapAttached = 'SourceMapAttached',
+  SourceMapDetached = 'SourceMapDetached',
+  /* eslint-enable @typescript-eslint/naming-convention */
+}
+
+export interface EventTypes<T extends FrameAssociated> {
+  [Events.SourceMapWillAttach]: {client: T};
+  [Events.SourceMapFailedToAttach]: {client: T};
+  [Events.SourceMapAttached]: {client: T, sourceMap: SourceMap};
+  [Events.SourceMapDetached]: {client: T, sourceMap: SourceMap};
+}

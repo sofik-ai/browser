@@ -1,0 +1,30 @@
+# Copyright 2020 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("../../../scripts/build/ninja/devtools_entrypoint.gni")
+import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/ninja/devtools_worker.gni")
+
+devtools_module("lighthouse_worker") {
+  sources = [ "LighthouseWorkerService.ts" ]
+
+  deps = [
+    "../../core/protocol_client:bundle",
+    "../../core/root:bundle",
+    "../../core/sdk:bundle",
+    "../../services/puppeteer:bundle",
+    "../../third_party/lighthouse",
+    "../../third_party/third-party-web:bundle",
+  ]
+}
+
+devtools_entrypoint("bundle") {
+  entrypoint = "lighthouse_worker.ts"
+
+  forward_variables_from(devtools_worker_config, "*")
+
+  deps = [ ":lighthouse_worker" ]
+
+  visibility = [ "../..:front_end" ]
+}

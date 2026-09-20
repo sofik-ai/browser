@@ -1,0 +1,65 @@
+# Copyright 2020 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("../../../scripts/build/ninja/devtools_entrypoint.gni")
+import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/ninja/devtools_pre_built.gni")
+import("../../../scripts/build/ninja/vars.gni")
+import("../../../scripts/build/typescript/typescript.gni")
+
+devtools_foundation_module("platform") {
+  sources = [
+    "ArrayUtilities.ts",
+    "Brand.ts",
+    "Constructor.ts",
+    "DateUtilities.ts",
+    "DevToolsPath.ts",
+    "HostRuntime.ts",
+    "KeyboardUtilities.ts",
+    "MapUtilities.ts",
+    "MimeType.ts",
+    "NumberUtilities.ts",
+    "StringUtilities.ts",
+    "Timing.ts",
+    "TypedArrayUtilities.ts",
+    "TypescriptUtilities.ts",
+    "UIString.ts",
+    "UserVisibleError.ts",
+  ]
+
+  deps = [
+    "./api:bundle",
+    "./browser:bundle",
+    "./node:bundle",
+  ]
+}
+
+devtools_entrypoint("bundle") {
+  entrypoint = "platform.ts"
+
+  deps = [ ":platform" ]
+
+  visibility = [ "*" ]
+}
+
+devtools_foundation_module("unittests") {
+  testonly = true
+
+  sources = [
+    "ArrayUtilities.test.ts",
+    "DateUtilities.test.ts",
+    "DevToolsPath.test.ts",
+    "KeyboardUtilities.test.ts",
+    "MapUtilities.test.ts",
+    "MimeType.test.ts",
+    "NumberUtilities.test.ts",
+    "StringUtilities.test.ts",
+    "TypedArrayUtilities.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../testing",
+  ]
+}

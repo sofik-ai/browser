@@ -1,0 +1,20 @@
+// Copyright 2022 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+import {writeIfChanged} from './write-if-changed.js';
+
+const [, , dest, ...files] = process.argv;
+
+for (const file of files) {
+  const filename = path.basename(file);
+  const destPath = path.join(dest, filename);
+
+  // Minifying JSON is straight-forward as JSON.stringify omits whitespace.
+  const srcContents = fs.readFileSync(file);
+  const destContents = JSON.stringify(JSON.parse(srcContents));
+  writeIfChanged(destPath, destContents);
+}

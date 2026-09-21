@@ -164,6 +164,8 @@ jobs:
         run: >-
           python sofik/ci/build.py build --config "$CONFIG"
           --deadline ${{ inputs.deadline }}
+          --checkpoint 90 --cache-name "sccache-${{ inputs.platform }}"
+          --cache-dir "$SCCACHE_DIR"
 
       # Even after a failure: the compiles that did succeed are worth keeping,
       # and this is the only thing this job produces that the next one can use.

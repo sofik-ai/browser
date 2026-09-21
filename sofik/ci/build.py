@@ -553,6 +553,41 @@ def run_with_deadline(command: list[str], cwd: Path, env, seconds: int) -> int |
         return None
 
 
+def checkpoint(args: argparse.Namespace) -> None:
+    """Uploads the compiler cache as it stands, mid-stage."""
+    print("--> checkpoint: saving the compiler cache", flush=True)
+    # Stopped so that the directory is whole while it is archived; the next
+    # compile starts another server.
+    subprocess.run(["sccache", "--stop-server"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run([sys.executable, str(Path(__file__).with_name("cache.py")),
+                    "save", "--name", args.cache_name, "--dir", args.cache_dir])
+
+
+def compile_in_segments(args: argparse.Namespace, env) -> int | None:
+    """The deadline, cut into pieces with the cache saved between them.
+
+    A hosted runner can vanish -- "lost communication with the server", three
+    and a half hours into a Windows stage -- and then nothing after Compile
+    runs, the save included: the next stage started from where the previous
+    one had. Stopping the build costs the compiles in flight and restarting
+    it a few minutes, which is cheap against losing a stage.
+    """
+    total = args.deadline * 60
+    segment = args.checkpoint * 60 if args.checkpoint and args.cache_dir else total
+    started = time.monotonic()
+    while True:
+        left = total - (time.monotonic() - started)
+        # A last piece too short to be worth a restart joins the one before.
+        last = left <= segment * 1.5
+        code = run_with_deadline(
+            ninja_command(args.config), SRC, env, int(left if last else segment)
+        )
+        if code is not None or last:
+            return code
+        checkpoint(args)
+
+
 def cmd_build(args: argparse.Namespace) -> None:
     require_tree()
     if not (SRC / out_dir(args.config) / "args.gn").is_file():
@@ -568,9 +603,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         set_output("complete", "false")
         raise SystemExit("the tree is incomplete for this platform; "
                          "restore the files above (they are in quarantine)")
-    code = run_with_deadline(
-        ninja_command(args.config), SRC, env, args.deadline * 60
-    )
+    code = compile_in_segments(args, env)
 
     if shutil.which("sccache"):
         # Printed whatever happened: hit rate is how a stage is judged, and a
@@ -866,6 +899,12 @@ def main() -> None:
         "--deadline", type=int, required=True,
         help="minutes to compile for before stopping cleanly",
     )
+    build.add_argument(
+        "--checkpoint", type=int, default=0,
+        help="minutes between saves of the compiler cache during the build",
+    )
+    build.add_argument("--cache-name", help="the cache to checkpoint")
+    build.add_argument("--cache-dir", help="its directory; none, no checkpoints")
     build.set_defaults(handler=cmd_build)
 
     package = with_config(sub.add_parser("package", help="make the release asset"))

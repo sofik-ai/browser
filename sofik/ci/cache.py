@@ -344,6 +344,9 @@ def cmd_save(args: argparse.Namespace) -> None:
         shutil.rmtree(staging, ignore_errors=True)
 
     prune_stale_parts(repo, args.name, len(writer.index))
+    # What is published now is what a later save in the same job compares
+    # against: a checkpoint followed by nothing new uploads nothing.
+    stamp(directory, args.name, size)
     print(f"--> saved {human(size)} as {len(writer.index)} part(s) in "
           f"{int(time.monotonic() - started)}s", flush=True)
 

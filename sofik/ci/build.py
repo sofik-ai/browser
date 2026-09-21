@@ -172,12 +172,13 @@ SCCACHE_GN_ARGS: dict[str, str] = {
 # Label form throughout: the short aliases GN also writes only exist when the
 # name happens to be unique, and `cefclient` and `chrome_sandbox` are not
 # unique on Linux. Derived from what cef/tools/make_distrib.py copies in
-# minimal mode, and the same lists tool/chromium/inputs.py uses.
+# minimal mode. Not cefclient: the sample application is in no minimal
+# distribution, and on Linux it wants GTK headers the sysroot does not carry --
+# the first Linux build compiled all of libcef and failed on it alone.
 CEF_TARGETS: dict[str, list[str]] = {
     "windows64": [
         "cef:libcef",
         "cef:libcef_dll_wrapper",
-        "cef:cefclient",
         "chrome/chrome_elf:chrome_elf",
         "cef:bootstrap",
         "cef:bootstrapc",
@@ -186,7 +187,6 @@ CEF_TARGETS: dict[str, list[str]] = {
     "linux64": [
         "cef:libcef",
         "cef:libcef_dll_wrapper",
-        "cef:cefclient",
         "sandbox/linux:chrome_sandbox",
     ],
     # macOS publishes the engine, not CEF. Kept so a developer can still run

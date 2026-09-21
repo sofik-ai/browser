@@ -375,6 +375,28 @@ def prune_stale_parts(repo: str, name: str, kept: int) -> None:
                "--repo", repo, "--yes", check=False)
 
 
+def cmd_drop(args: argparse.Namespace) -> None:
+    """Deletes every asset named PREFIX.* -- except those named KEEP.*.
+
+    The carried output directory is tens of gigabytes and belongs to one
+    release run; a cancelled or finished run must not leave its copy in the
+    release for ever.
+    """
+    repo = repo_of(args)
+    result = gh("release", "view", CACHE_RELEASE, "--repo", repo,
+                "--json", "assets", "-q", ".assets[].name", check=False)
+    if result.returncode != 0:
+        return
+    for asset in result.stdout.split():
+        if not asset.startswith(f"{args.prefix}."):
+            continue
+        if args.keep and asset.startswith(f"{args.keep}."):
+            continue
+        print(f"--> removing {asset}", flush=True)
+        gh("release", "delete-asset", CACHE_RELEASE, asset,
+           "--repo", repo, "--yes", check=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -388,6 +410,12 @@ def main() -> None:
         command.add_argument("--repo", help="owner/name; GH_REPO by default")
         command.add_argument("--staging", help="where parts are written")
         command.set_defaults(handler=handler)
+    drop = sub.add_parser("drop", help="delete assets by name prefix")
+    drop.add_argument("--prefix", required=True,
+                      help="asset base name, or a prefix ending before the dot")
+    drop.add_argument("--keep", help="a base name to leave alone")
+    drop.add_argument("--repo", help="owner/name; GH_REPO by default")
+    drop.set_defaults(handler=cmd_drop)
     args = parser.parse_args()
     args.handler(args)
 

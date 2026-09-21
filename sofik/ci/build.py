@@ -374,6 +374,15 @@ def cmd_runner_setup(_: argparse.Namespace) -> None:
         subprocess.run(["docker", "system", "prune", "--all", "--force"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    if IS_WINDOWS:
+        # Every compile reads hundreds of headers and writes an object, and
+        # the real-time scanner looks at each of them. The runner is ours for
+        # the hour, and it is a build machine.
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Set-MpPreference -DisableRealtimeMonitoring $true"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     roomiest = roomiest_volume()
     for candidate in {volume, str(roomiest)}:
         print(f"--> free on {candidate}: {human(free_space(candidate))}", flush=True)
@@ -553,6 +562,46 @@ def run_with_deadline(command: list[str], cwd: Path, env, seconds: int) -> int |
         return None
 
 
+# 2001-01-01. Older than any output, newer than nothing that matters.
+OLD = 978307200
+
+
+def make_sources_old() -> int:
+    """Sets the modification time of everything outside out/ to OLD.
+
+    siso, like ninja, decides that a step is stale when an input is newer than
+    its output, and decides it by the clock, not by content: touching a header
+    without changing a byte made a warm local build re-run 16,000 steps. A
+    stage that restores the previous stage's output directory has fresh
+    checkout, toolchain and generated files, all newer than every object in
+    it, so without this all of it would be redone -- from the compiler cache,
+    which is exactly the replay that does not fit in a stage on Windows.
+
+    Only the timestamps change. A commit that differs from the one the output
+    directory was built at must not reach this point with that directory; the
+    workflow names the carried directory after the run for that reason.
+    """
+    count = 0
+    stack = [SRC]
+    while stack:
+        directory = stack.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if directory == SRC and entry.name in ("out", ".git"):
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    try:
+                        os.utime(entry.path, (OLD, OLD), follow_symlinks=False)
+                    except NotImplementedError:
+                        os.utime(entry.path, (OLD, OLD))
+                    count += 1
+                except OSError:
+                    continue
+    return count
+
+
 def checkpoint(args: argparse.Namespace) -> None:
     """Uploads the compiler cache as it stands, mid-stage."""
     print("--> checkpoint: saving the compiler cache", flush=True)
@@ -603,6 +652,13 @@ def cmd_build(args: argparse.Namespace) -> None:
         set_output("complete", "false")
         raise SystemExit("the tree is incomplete for this platform; "
                          "restore the files above (they are in quarantine)")
+    if any((SRC / out_dir(args.config) / name).exists()
+           for name in (".siso_fs_state", ".siso_deps")):
+        # An output directory from a previous stage: see make_sources_old.
+        started = time.monotonic()
+        count = make_sources_old()
+        print(f"--> {count} files older than the carried outputs, "
+              f"{int(time.monotonic() - started)}s", flush=True)
     code = compile_in_segments(args, env)
 
     if shutil.which("sccache"):

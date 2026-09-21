@@ -642,6 +642,29 @@ def tar_gz(source: Path, archive: Path, arcname: str) -> None:
         tar.add(source, arcname=arcname)
 
 
+def strip_elf(directory: Path) -> None:
+    """Drops the symbol tables of what ships.
+
+    CEF hands out libcef.so with them and tells the consumer to strip it. With
+    symbol_level=0 there is no debug information to lose, only names: the
+    first Linux libcef.so was 488 MB, 204 MB of it .symtab and .strtab that
+    nothing reads at run time. The dynamic symbols -- the cef_* API -- stay.
+    """
+    strip = SRC / "third_party" / "llvm-build" / "Release+Asserts" / "bin" / "llvm-strip"
+    if not strip.is_file():
+        strip = Path(shutil.which("strip") or "strip")
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or path.is_symlink():
+            continue
+        with path.open("rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                continue
+        before = path.stat().st_size
+        run([str(strip), "--strip-unneeded", str(path)], directory)
+        print(f"--> stripped {path.name}: {before >> 20} MB -> "
+              f"{path.stat().st_size >> 20} MB", flush=True)
+
+
 def package_cef(dest: Path) -> tuple[Path, str]:
     distrib = dest / "distrib"
     distrib.mkdir(parents=True, exist_ok=True)
@@ -669,6 +692,8 @@ def package_cef(dest: Path) -> tuple[Path, str]:
     if not built:
         raise SystemExit(f"make_distrib produced nothing in {distrib}")
     distribution = built[-1]
+    if IS_LINUX:
+        strip_elf(distribution / "Release")
     version = distribution.name.removeprefix("cef_binary_").removesuffix(
         f"_{platform_tag()}_minimal"
     )

@@ -17,8 +17,18 @@ else:
 
 
 def is_checkout(path):
-  """ Returns true if the path represents a git checkout. """
-  return os.path.exists(os.path.join(path, '.git'))
+  """ Returns true if the path is in a git checkout. """
+  # Sofik: in one, not the root of one. CEF is a directory of the browser's
+  # repository here, not a checkout of its own, and git answers for it from
+  # the repository above.
+  path = os.path.realpath(path)
+  while True:
+    if os.path.exists(os.path.join(path, '.git')):
+      return True
+    parent = os.path.dirname(path)
+    if parent == path:
+      return False
+    path = parent
 
 
 def is_ancestor(path='.', commit1='HEAD', commit2='master'):

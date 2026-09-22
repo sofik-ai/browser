@@ -664,13 +664,18 @@ def cmd_build(args: argparse.Namespace) -> None:
         set_output("complete", "false")
         raise SystemExit("the tree is incomplete for this platform; "
                          "restore the files above (they are in quarantine)")
-    if any((SRC / out_dir(args.config) / name).exists()
-           for name in (".siso_fs_state", ".siso_deps")):
-        # An output directory from a previous stage: see make_sources_old.
-        started = time.monotonic()
-        count = make_sources_old()
-        print(f"--> {count} files older than the carried outputs, "
-              f"{int(time.monotonic() - started)}s", flush=True)
+    # Always, not only when an output directory was carried in: siso decides
+    # an input changed when its recorded metadata (from whichever stage last
+    # wrote to .siso_fs_state) does not match what it now sees, in either
+    # direction -- not "is it newer". A first stage that leaves sources at
+    # today's real mtime and a second that then set them to a fixed one would
+    # itself look like 300,000 changed inputs to the state carried between
+    # them; every stage has to record the same value for a later one carrying
+    # its output directory to see nothing changed at all.
+    started = time.monotonic()
+    count = make_sources_old()
+    print(f"--> {count} sources set to a fixed mtime, "
+          f"{int(time.monotonic() - started)}s", flush=True)
     code = compile_in_segments(args, env)
 
     if shutil.which("sccache"):

@@ -156,7 +156,9 @@ jobs:
       - name: Generate
         id: gen
         if: steps.status.outputs.settled == ''
-        run: python sofik/ci/build.py gen --config "$CONFIG"
+        run: >-
+          python sofik/ci/build.py gen --config "$CONFIG"
+          ${{ inputs.carry_out_dir && '--if-needed' || '' }}
 
       - name: Compile
         id: build

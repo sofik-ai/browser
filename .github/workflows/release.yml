@@ -53,6 +53,14 @@ on:
         required: false
         default: false
         type: boolean
+      carry_key:
+        description: >-
+          continue from the output directory an earlier run carried, by that
+          run's tag (e.g. v149.0.7827.201-sofik.29). Only for the same sources:
+          a run that ran out of stages a few hundred steps from the end.
+        required: false
+        default: ""
+        type: string
       platforms:
         description: which platforms to build, comma separated
         required: false
@@ -99,6 +107,7 @@ jobs:
       deadline: ${{ steps.plan.outputs.deadline }}
       sccache_size: ${{ steps.plan.outputs.sccache_size }}
       carry_out_dir: ${{ steps.plan.outputs.carry_out_dir }}
+      carry_key: ${{ inputs.carry_key || steps.tag.outputs.tag }}
     steps:
       # The scripts and the version file. A full checkout of this tree is
       # several gigabytes, and this job reads four lines.
@@ -172,6 +181,7 @@ jobs:
       deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
       sccache_size: ${{ needs.prepare.outputs.sccache_size }}
       carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+      carry_key: ${{ needs.prepare.outputs.carry_key }}
 
   stage-2:
     needs: [prepare, stage-1]
@@ -188,6 +198,7 @@ jobs:
       deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
       sccache_size: ${{ needs.prepare.outputs.sccache_size }}
       carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+      carry_key: ${{ needs.prepare.outputs.carry_key }}
 
   stage-3:
     needs: [prepare, stage-2]
@@ -204,6 +215,7 @@ jobs:
       deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
       sccache_size: ${{ needs.prepare.outputs.sccache_size }}
       carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+      carry_key: ${{ needs.prepare.outputs.carry_key }}
 
   stage-4:
     needs: [prepare, stage-3]
@@ -220,6 +232,7 @@ jobs:
       deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
       sccache_size: ${{ needs.prepare.outputs.sccache_size }}
       carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+      carry_key: ${{ needs.prepare.outputs.carry_key }}
 
   stage-5:
     needs: [prepare, stage-4]
@@ -236,6 +249,7 @@ jobs:
       deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
       sccache_size: ${{ needs.prepare.outputs.sccache_size }}
       carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+      carry_key: ${{ needs.prepare.outputs.carry_key }}
 
   stage-6:
     needs: [prepare, stage-5]
@@ -252,6 +266,7 @@ jobs:
       deadline: ${{ fromJSON(needs.prepare.outputs.deadline) }}
       sccache_size: ${{ needs.prepare.outputs.sccache_size }}
       carry_out_dir: ${{ fromJSON(needs.prepare.outputs.carry_out_dir) }}
+      carry_key: ${{ needs.prepare.outputs.carry_key }}
 
   manifest:
     needs: [prepare, stage-1, stage-2, stage-3, stage-4, stage-5, stage-6]

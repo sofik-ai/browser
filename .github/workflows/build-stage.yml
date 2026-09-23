@@ -58,6 +58,13 @@ on:
         required: false
         default: false
         type: boolean
+      carry_key:
+        description: >-
+          the name the carried output directory travels under; the release tag
+          unless a run continues an earlier one's
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -78,6 +85,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "false"
       CONFIG: ${{ inputs.platform == 'macosarm64' && 'engine' || 'cef' }}
       OUT_DIR: ${{ inputs.platform == 'macosarm64' && 'out/Engine_arm64' || 'out/Release_GN_x64' }}
+      CARRY_KEY: ${{ inputs.carry_key || inputs.tag }}
     defaults:
       run:
         # One shell on all three operating systems, so these steps are one
@@ -151,7 +159,7 @@ jobs:
         if: steps.status.outputs.settled == '' && inputs.carry_out_dir
         run: >-
           python sofik/ci/cache.py restore
-          --name "out-${{ inputs.platform }}-${{ inputs.tag }}" --dir "$OUT_DIR"
+          --name "out-${{ inputs.platform }}-$CARRY_KEY" --dir "$OUT_DIR"
 
       - name: Generate
         id: gen
@@ -186,16 +194,16 @@ jobs:
         if: ${{ !cancelled() && steps.status.outputs.settled == '' && inputs.carry_out_dir && steps.build.outputs.complete != 'true' }}
         run: >-
           python sofik/ci/cache.py save
-          --name "out-${{ inputs.platform }}-${{ inputs.tag }}" --dir "$OUT_DIR"
+          --name "out-${{ inputs.platform }}-$CARRY_KEY" --dir "$OUT_DIR"
           && python sofik/ci/cache.py drop
-          --prefix "out-${{ inputs.platform }}-" --keep "out-${{ inputs.platform }}-${{ inputs.tag }}"
+          --prefix "out-${{ inputs.platform }}-" --keep "out-${{ inputs.platform }}-$CARRY_KEY"
 
       - name: Drop the carried output directory
         # Published: nothing is going to continue from it.
         if: ${{ !cancelled() && steps.build.outputs.complete == 'true' && inputs.carry_out_dir }}
         run: >-
           python sofik/ci/cache.py drop
-          --prefix "out-${{ inputs.platform }}-${{ inputs.tag }}"
+          --prefix "out-${{ inputs.platform }}-$CARRY_KEY"
 
       - name: Package
         if: steps.build.outputs.complete == 'true'

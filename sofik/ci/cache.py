@@ -209,6 +209,32 @@ class PartReader:
 # ---- restore ---------------------------------------------------------------
 
 
+# A tar header keeps whole seconds, and siso records every output's
+# modification time to the nanosecond: an output directory that went through a
+# plain tar came back with every object "modified", and each stage re-ran some
+# 30,000 compiles -- all of them sccache hits, four hours of them -- before
+# doing anything new. Measured locally: truncating a finished build's output
+# times to the second turned a 6-second no-op into 40,000 steps. So the exact
+# time travels in a pax header of its own and is put back after extraction.
+MTIME_NS = "SOFIK.mtime_ns"
+
+
+def restore_times(times: list[tuple[Path, int, bool]]) -> None:
+    """Sets the recorded times: files first, then directories deepest first,
+    since writing into a directory moves its time."""
+    files = [t for t in times if not t[2]]
+    directories = sorted((t for t in times if t[2]),
+                         key=lambda t: len(t[0].parts), reverse=True)
+    for path, ns, _ in files + directories:
+        try:
+            os.utime(path, ns=(ns, ns), follow_symlinks=False)
+        except (NotImplementedError, OSError):
+            try:
+                os.utime(path, ns=(ns, ns))
+            except OSError:
+                pass
+
+
 def cmd_restore(args: argparse.Namespace) -> None:
     repo = repo_of(args)
     directory = Path(args.dir).resolve()
@@ -240,15 +266,20 @@ def cmd_restore(args: argparse.Namespace) -> None:
             return staging / part_name
 
         reader = PartReader(parts, fetch)
+        times: list[tuple[Path, int, bool]] = []
         with tarfile.open(fileobj=reader, mode="r|") as tar:
-            # The `tar` filter keeps the mode and the timestamp and drops the
-            # owner, which is what restoring build output into a different
-            # runner's account needs. Absent before 3.12, where extractall
-            # behaves this way anyway.
-            try:
-                tar.extractall(directory, filter="tar")
-            except TypeError:
-                tar.extractall(directory)
+            for member in tar:
+                # The `tar` filter keeps the mode and drops the owner, which is
+                # what restoring build output into a different runner's
+                # account needs. Absent before 3.12.
+                try:
+                    tar.extract(member, directory, filter="tar")
+                except TypeError:
+                    tar.extract(member, directory)
+                ns = member.pax_headers.get(MTIME_NS)
+                if ns is not None:
+                    times.append((directory / member.name, int(ns), member.isdir()))
+        restore_times(times)
         reader.finish()
     except Exception as error:  # noqa: BLE001 -- a cache never fails a build
         shutil.rmtree(directory, ignore_errors=True)
@@ -323,8 +354,17 @@ def cmd_save(args: argparse.Namespace) -> None:
     try:
         # Uncompressed: sccache already stores every entry compressed, so a
         # second pass costs CPU on a four-core runner and saves almost nothing.
-        with tarfile.open(fileobj=writer, mode="w|") as tar:
-            tar.add(directory, arcname=".")
+        def exact_time(info: tarfile.TarInfo) -> tarfile.TarInfo:
+            try:
+                ns = os.lstat(directory / info.name).st_mtime_ns
+            except OSError:
+                return info
+            info.pax_headers = {**info.pax_headers, MTIME_NS: str(ns)}
+            return info
+
+        with tarfile.open(fileobj=writer, mode="w|",
+                          format=tarfile.PAX_FORMAT) as tar:
+            tar.add(directory, arcname=".", filter=exact_time)
         writer.close()
 
         index = staging / f"{args.name}.index"

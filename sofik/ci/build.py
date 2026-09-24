@@ -853,7 +853,12 @@ def used_inputs(config: str, env) -> list[str]:
         if os.path.normcase(path).startswith(inside) \
                 or os.path.normcase(path) == os.path.normcase(out_root):
             continue
-        relative = os.path.relpath(path, src_root)
+        try:
+            relative = os.path.relpath(path, src_root)
+        except ValueError:
+            # Another drive -- the Windows SDK and MSVC headers on C: while
+            # the tree is on D:. Not part of the tree either way.
+            continue
         if relative.startswith(".."):
             continue
         found.add(relative.replace(os.sep, "/"))

@@ -809,18 +809,17 @@ def used_inputs(config: str, env) -> list[str]:
     """
     import re
     directory = out_dir(config)
-    out_root = (SRC / directory).resolve()
-    src_root = SRC.resolve()
-    found: set[str] = set()
+    out_root = str((SRC / directory).resolve())
+    src_root = str(SRC.resolve())
+    # Raw spellings first, resolved once each at the end. The deps query
+    # names every header of every object -- tens of millions of lines, almost
+    # all repeats -- and resolving each against the disk, which is what
+    # Path.resolve does on Windows, held the first finished Windows build in
+    # this function for five hours, until the job's time ran out.
+    raw: set[str] = set()
 
-    def keep(path: Path) -> None:
-        try:
-            path = path.resolve()
-            if out_root == path or out_root in path.parents:
-                return
-            found.add(path.relative_to(src_root).as_posix())
-        except (ValueError, OSError):
-            pass
+    def keep(path) -> None:
+        raw.add(str(path))
 
     targets = ninja_command(config)[5:]
     for query, args in (("inputs", targets), ("deps", [])):
@@ -835,8 +834,8 @@ def used_inputs(config: str, env) -> list[str]:
                 continue
             line = line.strip()
             if line:
-                keep(out_root / line)
-    for depfile in out_root.rglob("*.d"):
+                keep(os.path.join(out_root, line))
+    for depfile in Path(out_root).rglob("*.d"):
         try:
             text = depfile.read_text(errors="replace")
         except OSError:
@@ -846,7 +845,18 @@ def used_inputs(config: str, env) -> list[str]:
             token = token.replace("\\ ", " ")
             if token.endswith(":"):
                 continue
-            keep(Path(token) if os.path.isabs(token) else out_root / token)
+            keep(token if os.path.isabs(token) else os.path.join(out_root, token))
+    found: set[str] = set()
+    inside = os.path.normcase(out_root) + os.sep
+    for path in raw:
+        path = os.path.normpath(path)
+        if os.path.normcase(path).startswith(inside) \
+                or os.path.normcase(path) == os.path.normcase(out_root):
+            continue
+        relative = os.path.relpath(path, src_root)
+        if relative.startswith(".."):
+            continue
+        found.add(relative.replace(os.sep, "/"))
     return sorted(found)
 
 

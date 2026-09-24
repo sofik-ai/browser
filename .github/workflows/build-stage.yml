@@ -189,21 +189,15 @@ jobs:
           --name "sccache-${{ inputs.platform }}" --dir "$SCCACHE_DIR"
 
       - name: Save the output directory
-        # Not when the build is complete: the next thing that happens to it is
-        # Package, here, and there is no next stage to hand it to.
-        if: ${{ !cancelled() && steps.status.outputs.settled == '' && inputs.carry_out_dir && steps.build.outputs.complete != 'true' }}
+        # Complete or not: until the release is published, a later stage may
+        # still need it -- the first finished Windows build lost its directory
+        # to a packaging step that ran out of time.
+        if: ${{ !cancelled() && steps.status.outputs.settled == '' && inputs.carry_out_dir }}
         run: >-
           python sofik/ci/cache.py save
           --name "out-${{ inputs.platform }}-$CARRY_KEY" --dir "$OUT_DIR"
           && python sofik/ci/cache.py drop
           --prefix "out-${{ inputs.platform }}-" --keep "out-${{ inputs.platform }}-$CARRY_KEY"
-
-      - name: Drop the carried output directory
-        # Published: nothing is going to continue from it.
-        if: ${{ !cancelled() && steps.build.outputs.complete == 'true' && inputs.carry_out_dir }}
-        run: >-
-          python sofik/ci/cache.py drop
-          --prefix "out-${{ inputs.platform }}-$CARRY_KEY"
 
       - name: Package
         if: steps.build.outputs.complete == 'true'
@@ -226,6 +220,13 @@ jobs:
           if ls dist/inputs-*.txt.gz >/dev/null 2>&1; then
             gh release upload "${{ inputs.tag }}" dist/inputs-*.txt.gz --clobber
           fi
+
+      - name: Drop the carried output directory
+        # Published: nothing is going to continue from it.
+        if: ${{ success() && steps.build.outputs.complete == 'true' && inputs.carry_out_dir }}
+        run: >-
+          python sofik/ci/cache.py drop
+          --prefix "out-${{ inputs.platform }}-$CARRY_KEY"
 
       - name: Record that this platform stopped
         # Only a real failure of this tree -- it does not generate, or it does
